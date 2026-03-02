@@ -65,7 +65,17 @@ export function createInMemoryPipelineStore(): PipelineStore {
   };
 }
 
-export const defaultPipelineStore = createInMemoryPipelineStore();
+declare global {
+  // eslint-disable-next-line no-var
+  var __coreNewsPipelineStore: PipelineStore | undefined;
+}
+
+export const defaultPipelineStore =
+  globalThis.__coreNewsPipelineStore ?? createInMemoryPipelineStore();
+
+if (!globalThis.__coreNewsPipelineStore) {
+  globalThis.__coreNewsPipelineStore = defaultPipelineStore;
+}
 
 type RunDailyInput = {
   store: PipelineStore;

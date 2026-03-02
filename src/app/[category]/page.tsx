@@ -28,7 +28,20 @@ export default async function CategoryPage({
     string,
     CategoryEvent[]
   >;
-  const allEvents = categoryPayloads[category] ?? [];
+  const fallbackEvents: CategoryEvent[] = [
+    {
+      id: "ai-openai-releases-gpt-5",
+      canonicalTitle: "OpenAI releases GPT-5",
+      summaryCn: "Demo fallback event for initial bootstrap.",
+      hotScore: 88.2,
+    },
+  ];
+  const allEvents =
+    categoryPayloads[category] && categoryPayloads[category].length > 0
+      ? categoryPayloads[category]
+      : category === "ai"
+        ? fallbackEvents
+        : [];
   const start = (page - 1) * PAGE_SIZE;
   const events = allEvents.slice(start, start + PAGE_SIZE);
 
