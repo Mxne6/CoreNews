@@ -25,3 +25,39 @@ export function buildSnapshotPayload(events: SnapshotEvent[]) {
 
   return { homePayload, categoryPayloads };
 }
+
+export function buildSnapshotRows(
+  runId: number,
+  events: SnapshotEvent[],
+  generatedAt: string,
+  version = "v1",
+) {
+  const { homePayload, categoryPayloads } = buildSnapshotPayload(events);
+  const rows: Array<{
+    run_id: number;
+    key: string;
+    payload_json: unknown;
+    generated_at: string;
+    version: string;
+  }> = [
+    {
+      run_id: runId,
+      key: "home",
+      payload_json: homePayload,
+      generated_at: generatedAt,
+      version,
+    },
+  ];
+
+  for (const [category, payload] of Object.entries(categoryPayloads)) {
+    rows.push({
+      run_id: runId,
+      key: `category:${category}`,
+      payload_json: payload,
+      generated_at: generatedAt,
+      version,
+    });
+  }
+
+  return rows;
+}
