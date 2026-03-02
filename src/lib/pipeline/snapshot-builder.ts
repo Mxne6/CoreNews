@@ -1,4 +1,4 @@
-export type SnapshotEvent = {
+﻿export type SnapshotEvent = {
   id: string;
   category: string;
   canonicalTitle: string;
@@ -7,21 +7,32 @@ export type SnapshotEvent = {
   summaryCn: string;
 };
 
+export const HOME_EVENT_LIMIT = 40;
+
+function sortSnapshotEvents(events: SnapshotEvent[]) {
+  return [...events].sort((a, b) => {
+    if (b.hotScore !== a.hotScore) {
+      return b.hotScore - a.hotScore;
+    }
+    if (b.articleCount !== a.articleCount) {
+      return b.articleCount - a.articleCount;
+    }
+    return a.id.localeCompare(b.id);
+  });
+}
+
 export function buildSnapshotPayload(events: SnapshotEvent[]) {
-  const sorted = [...events].sort((a, b) => b.hotScore - a.hotScore);
-  const homePayload: Record<string, SnapshotEvent[]> = {};
+  const sorted = sortSnapshotEvents(events);
   const categoryPayloads: Record<string, SnapshotEvent[]> = {};
 
   for (const event of sorted) {
     if (!categoryPayloads[event.category]) {
       categoryPayloads[event.category] = [];
-      homePayload[event.category] = [];
     }
     categoryPayloads[event.category].push(event);
-    if (homePayload[event.category].length < 5) {
-      homePayload[event.category].push(event);
-    }
   }
+
+  const homePayload = sorted.slice(0, HOME_EVENT_LIMIT);
 
   return { homePayload, categoryPayloads };
 }
@@ -61,3 +72,4 @@ export function buildSnapshotRows(
 
   return rows;
 }
+

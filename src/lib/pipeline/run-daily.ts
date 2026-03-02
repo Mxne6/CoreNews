@@ -41,7 +41,7 @@ type PipelineRun = {
 
 type Snapshot = {
   generatedAt: Date;
-  homePayload: Record<string, unknown>;
+  homePayload: unknown[];
   categoryPayloads: Record<string, unknown>;
 };
 
@@ -126,8 +126,8 @@ export async function runDailyPipeline(input: RunDailyInput): Promise<void> {
 
     const totalDeduped = dedupeIncomingArticles([...existing, ...incoming]);
     const seen = new Set(input.store.articles.map((item) => item.url));
-    const newArticles = input.incomingArticles.filter((item) =>
-      totalDeduped.some((deduped) => deduped.url === item.url) && !seen.has(item.url),
+    const newArticles = input.incomingArticles.filter(
+      (item) => totalDeduped.some((deduped) => deduped.url === item.url) && !seen.has(item.url),
     );
     input.store.articles.push(...newArticles);
 
@@ -189,7 +189,9 @@ export async function runDailyPipeline(input: RunDailyInput): Promise<void> {
       });
       nextSummaries.push({
         eventId: id,
-        summaryCn: `该事件由 ${coverageCount} 家媒体报道，请查看原文获取完整细节。`,
+        summaryCn:
+          `${canonicalTitle} 在多源报道中持续发酵，当前已汇聚 ${coverageCount} 家媒体跟进。` +
+          "摘要聚焦关键进展与后续影响，建议结合原文交叉核对细节。",
         modelName: "qwen-max",
         modelVersion: "fallback-v1",
       });
@@ -219,8 +221,7 @@ export async function runDailyPipeline(input: RunDailyInput): Promise<void> {
       canonicalTitle: event.canonicalTitle,
       hotScore: event.hotScore,
       articleCount: event.articleIds.length,
-      summaryCn:
-        input.store.summaries.find((summary) => summary.eventId === event.id)?.summaryCn ?? "",
+      summaryCn: input.store.summaries.find((summary) => summary.eventId === event.id)?.summaryCn ?? "",
     }));
     const { homePayload, categoryPayloads } = buildSnapshotPayload(snapshotEvents);
     input.store.snapshots.push({

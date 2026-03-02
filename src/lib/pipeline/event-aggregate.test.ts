@@ -73,4 +73,36 @@ describe("aggregateEventsRolling", () => {
     expect(result.events).toHaveLength(2);
     expect(result.eventMappings.every((item) => item.articleIds.length === 1)).toBe(true);
   });
+
+  it("does not merge same headline across different categories", async () => {
+    const crossCategoryArticles: AggregationArticle[] = [
+      {
+        id: 21,
+        sourceId: 1,
+        title: "Summit opens in Tokyo",
+        normalizedTitle: "summit opens in tokyo",
+        publishedAt: "2026-03-02T07:20:00.000Z",
+        publishedAtFallback: "2026-03-02T07:20:00.000Z",
+      },
+      {
+        id: 22,
+        sourceId: 3,
+        title: "Summit opens in Tokyo",
+        normalizedTitle: "summit opens in tokyo",
+        publishedAt: "2026-03-02T07:10:00.000Z",
+        publishedAtFallback: "2026-03-02T07:10:00.000Z",
+      },
+    ];
+
+    const result = await aggregateEventsRolling({
+      articles: crossCategoryArticles,
+      sources,
+      now,
+      windowDays: 3,
+    });
+
+    expect(result.events).toHaveLength(2);
+    expect(new Set(result.events.map((event) => event.category))).toEqual(new Set(["ai", "world"]));
+    expect(result.eventMappings.every((item) => item.articleIds.length === 1)).toBe(true);
+  });
 });

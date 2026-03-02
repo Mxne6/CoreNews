@@ -28,6 +28,8 @@ describe("core news schema migrations", () => {
       expect.arrayContaining([
         "2026030201_core_news_schema.sql",
         "2026030202_pipeline_stability.sql",
+        "2026030203_source_authority_weight_range.sql",
+        "2026030204_read_model_perf_indexes.sql",
       ]),
     );
   });
@@ -111,5 +113,42 @@ describe("core news schema migrations", () => {
     expect(sql).toContain("add column if not exists payload_json jsonb");
     expect(sql).toContain("add column if not exists version text");
     expect(sql).toContain("uq_snapshots_run_key");
+  });
+
+  it("enforces authority_weight range between 0.80 and 1.30", () => {
+    const db = applyMigrations();
+
+    expect(() =>
+      db.public.none(`
+        insert into sources (name, rss_url, authority_weight, category)
+        values ('Valid Source', 'https://example.com/valid-rss', 1.00, 'world');
+      `),
+    ).not.toThrow();
+
+    expect(() =>
+      db.public.none(`
+        insert into sources (name, rss_url, authority_weight, category)
+        values ('Too Low', 'https://example.com/low-rss', 0.79, 'world');
+      `),
+    ).toThrow();
+
+    expect(() =>
+      db.public.none(`
+        insert into sources (name, rss_url, authority_weight, category)
+        values ('Too High', 'https://example.com/high-rss', 1.31, 'world');
+      `),
+    ).toThrow();
+  });
+
+  it("adds read-model performance indexes", () => {
+    const sql = fs.readFileSync(
+      path.join(migrationsDir, "2026030204_read_model_perf_indexes.sql"),
+      "utf8",
+    );
+    expect(sql).toContain("idx_pipeline_runs_success_started_at");
+    expect(sql).toContain("on pipeline_runs(started_at desc)");
+    expect(sql).toContain("where status = 'success'");
+    expect(sql).toContain("idx_snapshots_key_generated_at");
+    expect(sql).toContain("on snapshots(key, generated_at desc)");
   });
 });

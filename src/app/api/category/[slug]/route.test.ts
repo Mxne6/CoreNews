@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+﻿import { beforeEach, describe, expect, it } from "vitest";
 import { GET } from "@/app/api/category/[slug]/route";
 import { defaultPipelineStore } from "@/lib/pipeline/run-daily";
 
@@ -6,10 +6,11 @@ beforeEach(() => {
   defaultPipelineStore.snapshots.length = 0;
   defaultPipelineStore.snapshots.push({
     generatedAt: new Date("2026-03-02T00:00:00.000Z"),
-    homePayload: {},
+    homePayload: [],
     categoryPayloads: {
       ai: Array.from({ length: 12 }).map((_, index) => ({
         id: `ai:event-${index + 1}`,
+        category: "ai",
         canonicalTitle: `AI Event ${index + 1}`,
         hotScore: 90 - index,
       })),
@@ -35,4 +36,12 @@ describe("GET /api/category/[slug]", () => {
     expect(body.events).toHaveLength(5);
     expect(body.events[0].id).toBe("ai:event-6");
   });
+
+  it("returns 404 for unknown category slug", async () => {
+    const request = new Request("http://localhost:3000/api/category/unknown?page=1&pageSize=5");
+    const response = await GET(request, { params: Promise.resolve({ slug: "unknown" }) });
+
+    expect(response.status).toBe(404);
+  });
 });
+

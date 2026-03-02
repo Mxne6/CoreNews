@@ -23,6 +23,17 @@ function loadFixture(): Fixture {
 }
 
 describe("computeHotScore", () => {
+  it("matches v2 balanced scoring baseline fixture", () => {
+    const fixture = loadFixture();
+    const input = {
+      ...fixture,
+      lastPublishedAt: new Date(fixture.lastPublishedAt),
+      now: new Date(fixture.now),
+    };
+
+    expect(computeHotScore(input)).toBe(105.9868);
+  });
+
   it("is deterministic with fixed input", () => {
     const fixture = loadFixture();
     const input = {
@@ -66,6 +77,6 @@ describe("computeHotScore", () => {
 
 describe("SCORING_VERSION", () => {
   it("is versioned for regression traceability", () => {
-    expect(SCORING_VERSION).toMatch(/^v\d+$/);
+    expect(SCORING_VERSION).toBe("v2");
   });
 });

@@ -8,6 +8,7 @@ import {
   type PipelineRunMetrics,
   type SourceErrorPayload,
 } from "@/lib/pipeline/repository";
+import { SCORING_VERSION } from "@/lib/pipeline/scoring";
 import { buildSnapshotRows, type SnapshotEvent } from "@/lib/pipeline/snapshot-builder";
 import { fetchRss } from "@/lib/rss/fetch-rss";
 
@@ -34,8 +35,15 @@ type UpsertedEventRow = {
 
 const MAX_DASHSCOPE_SUMMARIES_PER_RUN = 20;
 
-function buildFallbackSummary(articleCount: number): string {
-  return `该事件在近 24-72 小时内有 ${articleCount} 条相关报道。`;
+function buildFallbackSummary(input: {
+  title: string;
+  category: string;
+  articleCount: number;
+}): string {
+  return (
+    `${input.title} 在过去 24-72 小时内持续发酵，已汇聚 ${input.articleCount} 条相关报道。` +
+    "当前焦点集中在关键进展与潜在影响，建议关注后续官方披露和跨来源交叉验证。"
+  );
 }
 
 function createDashScopeClientOrNull() {
@@ -85,9 +93,26 @@ async function upsertEventsAndMappings(
     return { snapshotEvents: [] as SnapshotEvent[] };
   }
 
+  const localizedTitleByStableKey = new Map<string, string>();
+  for (const event of aggregated.events) {
+    let localizedTitle = event.canonicalTitle;
+    if (dashScopeClient) {
+      try {
+        localizedTitle = await dashScopeClient.translateTitleToChinese({
+          title: event.canonicalTitle,
+          category: event.category,
+        });
+      } catch {
+        localizedTitle = event.canonicalTitle;
+      }
+    }
+    localizedTitleByStableKey.set(event.eventStableKey, localizedTitle.trim() || event.canonicalTitle);
+  }
+
   const eventPayload = aggregated.events.map((event) => ({
     event_stable_key: event.eventStableKey,
-    canonical_title: event.canonicalTitle,
+    canonical_title:
+      localizedTitleByStableKey.get(event.eventStableKey) ?? event.canonicalTitle,
     category: event.category,
     hot_score: event.hotScore,
     article_count: event.articleCount,
@@ -96,7 +121,7 @@ async function upsertEventsAndMappings(
     window_start: event.firstPublishedAt,
     window_end: event.lastPublishedAt,
     status: "active",
-    scoring_version: "v1",
+    scoring_version: SCORING_VERSION,
     snapshot_run_id: runId,
   }));
 
@@ -155,7 +180,15 @@ async function upsertEventsAndMappings(
     const eventId = Number(event.id);
     const stableKey = String(event.event_stable_key);
     const info = aggregatedByStableKey.get(stableKey);
-    const fallback = buildFallbackSummary(Number(event.article_count ?? 0));
+    const titleForSummary =
+      localizedTitleByStableKey.get(stableKey) ??
+      info?.canonicalTitle ??
+      String(event.canonical_title);
+    const fallback = buildFallbackSummary({
+      title: titleForSummary,
+      category: info?.category ?? String(event.category),
+      articleCount: Number(event.article_count ?? 0),
+    });
 
     let summary = fallback;
     let modelName = "rule-fallback";
@@ -164,7 +197,7 @@ async function upsertEventsAndMappings(
     if (dashScopeClient && info && llmEligibleEventIds.has(eventId)) {
       try {
         summary = await dashScopeClient.summarizeEvent({
-          title: info.canonicalTitle,
+          title: titleForSummary,
           category: info.category,
           articleCount: info.articleCount,
         });
@@ -203,7 +236,11 @@ async function upsertEventsAndMappings(
       articleCount: Number(event.article_count),
       summaryCn:
         summaryByEventId.get(Number(event.id)) ??
-        buildFallbackSummary(Number(event.article_count ?? 0)),
+        buildFallbackSummary({
+          title: String(event.canonical_title),
+          category: String(event.category),
+          articleCount: Number(event.article_count ?? 0),
+        }),
     }),
   );
 
@@ -266,7 +303,12 @@ export async function runDailySupabasePipeline(options?: {
       runId,
       dashScopeClient,
     );
-    const snapshotRows = buildSnapshotRows(runId, snapshotEvents, now.toISOString(), "v1");
+    const snapshotRows = buildSnapshotRows(
+      runId,
+      snapshotEvents,
+      now.toISOString(),
+      SCORING_VERSION,
+    );
     const { error: snapshotError } = await client
       .from("snapshots")
       .upsert(snapshotRows, { onConflict: "run_id,key" });

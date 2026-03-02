@@ -42,6 +42,16 @@ describe("runDailyPipeline", () => {
     expect(store.snapshots).toHaveLength(1);
   });
 
+  it("writes detailed fallback summaries instead of title-like short text", async () => {
+    const store = createInMemoryPipelineStore();
+    await runDailyPipeline({ store, incomingArticles: articles, now });
+
+    const summary = store.summaries[0]?.summaryCn ?? "";
+    expect(summary.length).toBeGreaterThanOrEqual(30);
+    expect(summary).toContain("关键进展");
+    expect(summary).toContain("后续影响");
+  });
+
   it("is idempotent on same input", async () => {
     const store = createInMemoryPipelineStore();
     await runDailyPipeline({ store, incomingArticles: articles, now });

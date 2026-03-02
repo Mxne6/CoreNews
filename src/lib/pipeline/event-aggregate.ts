@@ -59,6 +59,59 @@ function pickCategory(articles: AggregationArticle[], sourceById: Map<number, Ag
   return [...categoryCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "other";
 }
 
+function resolveArticleCategory(
+  article: Pick<AggregationArticle, "sourceId">,
+  sourceById: Map<number, AggregationSource>,
+): string {
+  return sourceById.get(article.sourceId)?.category ?? "other";
+}
+
+function buildCategoryScopedGroups(
+  articles: AggregationArticle[],
+  sourceById: Map<number, AggregationSource>,
+) {
+  const buckets = new Map<string, AggregationArticle[]>();
+  for (const article of articles) {
+    const category = resolveArticleCategory(article, sourceById);
+    const bucket = buckets.get(category);
+    if (bucket) {
+      bucket.push(article);
+    } else {
+      buckets.set(category, [article]);
+    }
+  }
+
+  const categoryGroups: Array<{
+    groupId: string;
+    ambiguous: boolean;
+    articles: Array<{
+      id: string;
+      sourceId: number;
+      normalizedTitle: string;
+      publishedAt: Date;
+    }>;
+  }> = [];
+
+  for (const [category, bucket] of [...buckets.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    const groups = clusterArticlesBySimilarity(
+      bucket.map((article) => ({
+        id: String(article.id),
+        sourceId: article.sourceId,
+        normalizedTitle: article.normalizedTitle,
+        publishedAt: resolvePublishedAt(article),
+      })),
+    );
+    for (const group of groups) {
+      categoryGroups.push({
+        ...group,
+        groupId: `${category}:${group.groupId}`,
+      });
+    }
+  }
+
+  return categoryGroups;
+}
+
 export async function aggregateEventsRolling(input: AggregateInput): Promise<{
   events: AggregatedEvent[];
   eventMappings: EventArticleMapping[];
@@ -69,14 +122,7 @@ export async function aggregateEventsRolling(input: AggregateInput): Promise<{
   const candidates = input.articles.filter((article) => resolvePublishedAt(article) >= windowStart);
   const candidateById = new Map(candidates.map((article) => [String(article.id), article]));
 
-  const groups = clusterArticlesBySimilarity(
-    candidates.map((article) => ({
-      id: String(article.id),
-      sourceId: article.sourceId,
-      normalizedTitle: article.normalizedTitle,
-      publishedAt: resolvePublishedAt(article),
-    })),
-  );
+  const groups = buildCategoryScopedGroups(candidates, sourceById);
 
   const resolvedByGroupId = new Map<string, { canonicalTitle: string; merged: boolean }>();
   if (input.ambiguityResolver) {

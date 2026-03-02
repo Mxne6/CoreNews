@@ -1,4 +1,4 @@
-export const SCORING_VERSION = "v1";
+export const SCORING_VERSION = "v2";
 
 export type HotScoreInput = {
   category: string;
@@ -14,11 +14,16 @@ export function computeHotScore(input: HotScoreInput): number {
     0,
     (input.now.getTime() - input.lastPublishedAt.getTime()) / 3_600_000,
   );
-  const recencyDecay = Math.exp(-hoursOld / 24);
-  const raw =
-    input.coverageCount * 35 +
-    input.authorityWeightSum * 20 +
-    input.articleCount * 5;
+  const coverage = Math.max(0, input.coverageCount);
+  const authority = Math.max(0, input.authorityWeightSum);
+  const articles = Math.max(0, input.articleCount);
 
-  return Number((raw * recencyDecay).toFixed(4));
+  const base =
+    50 * Math.log1p(coverage) +
+    30 * Math.log1p(authority) +
+    20 * Math.log1p(articles);
+  const recencyDecay = Math.exp(-hoursOld / 18);
+  const consensusBoost = 1 + Math.min(0.2, Math.max(0, coverage - 1) * 0.05);
+
+  return Number((base * recencyDecay * consensusBoost).toFixed(4));
 }

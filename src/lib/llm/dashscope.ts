@@ -37,6 +37,21 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function normalizeModelText(text: string): string {
+  return text.trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g, "").trim();
+}
+
+function buildDetailedFallbackSummary(input: {
+  title: string;
+  category: string;
+  articleCount: number;
+}): string {
+  return (
+    `${input.title} 在 ${input.category} 领域持续发酵，当前已汇聚 ${input.articleCount} 条跨来源报道。` +
+    "现阶段焦点集中在关键进展与潜在影响，后续可重点关注监管口径、产业连锁反应以及官方披露更新。"
+  );
+}
+
 export class DashScopeClient implements AmbiguityResolverClient {
   private readonly apiKey: string;
   private readonly model: string;
@@ -80,15 +95,41 @@ export class DashScopeClient implements AmbiguityResolverClient {
     const messages: DashScopeMessage[] = [
       {
         role: "system",
-        content: "You are a concise Chinese news editor. Return only one short Chinese summary.",
+        content:
+          "You are a Chinese news editor. Return one informative paragraph in Chinese with concrete details.",
       },
       {
         role: "user",
         content:
-          `请用中文总结该热点事件，控制在 60 字以内，不要添加“据报道”等套话。\n` +
+          "请用中文写 1 段热点摘要，长度 90-140 字。" +
+          "必须包含：当前进展、潜在影响或风险、后续观察点。" +
+          "不要只改写标题，不要使用“据报道”等空话。\n" +
           `标题: ${input.title}\n` +
           `分类: ${input.category}\n` +
           `报道数量: ${input.articleCount}`,
+      },
+    ];
+
+    const summary = await this.requestWithRetry(messages, 3);
+    if (summary.length >= 45) {
+      return summary;
+    }
+    return buildDetailedFallbackSummary(input);
+  }
+
+  async translateTitleToChinese(input: { title: string; category: string }): Promise<string> {
+    const messages: DashScopeMessage[] = [
+      {
+        role: "system",
+        content:
+          "You are a Chinese news editor. Translate headline to concise Chinese. Return title text only.",
+      },
+      {
+        role: "user",
+        content:
+          "请将下面新闻标题翻译为简体中文，保持信息准确，不要添加新信息，只输出标题本身。\n" +
+          `分类: ${input.category}\n` +
+          `标题: ${input.title}`,
       },
     ];
 
@@ -123,7 +164,7 @@ export class DashScopeClient implements AmbiguityResolverClient {
         }
 
         const payload = (await response.json()) as DashScopeResponse;
-        const text = extractDashScopeText(payload);
+        const text = normalizeModelText(extractDashScopeText(payload));
         if (!text) {
           throw new Error("empty");
         }

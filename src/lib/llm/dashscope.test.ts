@@ -51,7 +51,49 @@ describe("DashScopeClient.summarizeEvent", () => {
       articleCount: 4,
     });
 
-    expect(summary).toBe("mock summary");
+    const firstCall = fetchMock.mock.calls[0] as unknown as
+      | [RequestInfo | URL, RequestInit?]
+      | undefined;
+    const requestInit = firstCall?.[1];
+    const payload = JSON.parse(String(requestInit?.body ?? "")) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+
+    expect(summary.length).toBeGreaterThanOrEqual(45);
+    expect(summary).toContain("关键进展");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(payload.messages[1]?.content).toContain("90-140");
+  });
+});
+
+describe("DashScopeClient.translateTitleToChinese", () => {
+  it("returns translated Chinese title from mocked response", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ message: { content: "OpenAI 发布 GPT-5 模型" } }],
+      }),
+    }));
+    // @ts-expect-error test override
+    global.fetch = fetchMock;
+
+    const client = new DashScopeClient("test-key");
+    const translated = await client.translateTitleToChinese({
+      title: "OpenAI releases GPT-5",
+      category: "ai",
+    });
+
+    const firstCall = fetchMock.mock.calls[0] as unknown as
+      | [RequestInfo | URL, RequestInit?]
+      | undefined;
+    const requestInit = firstCall?.[1];
+    const payload = JSON.parse(String(requestInit?.body ?? "")) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+
+    expect(translated).toBe("OpenAI 发布 GPT-5 模型");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(payload.messages[0]?.content).toContain("Translate headline to concise Chinese");
   });
 });
