@@ -79,7 +79,7 @@ function loadDotEnvLocal() {
 }
 
 async function checkTableExists(client, table) {
-  const { error } = await client.from(table).select("id").limit(1);
+  const { error } = await client.from(table).select("*", { head: true, count: "exact" });
   if (!error) {
     return true;
   }
