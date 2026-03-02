@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { NewsCard } from "@/components/news-card";
 import { readCategorySnapshot } from "@/lib/pipeline/read-model";
 
@@ -44,6 +45,9 @@ export default async function CategoryPage({
         ? fallbackEvents
         : [];
   const total = categorySnapshot.total > 0 ? categorySnapshot.total : events.length;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const previousHref = `/${category}?page=${Math.max(1, page - 1)}`;
+  const nextHref = `/${category}?page=${Math.min(totalPages, page + 1)}`;
 
   return (
     <main className="min-h-screen bg-slate-100 px-6 py-10">
@@ -65,6 +69,25 @@ export default async function CategoryPage({
             />
           ))}
         </div>
+        <nav className="flex items-center justify-between rounded-xl bg-white p-4 text-sm shadow-sm">
+          {page > 1 ? (
+            <Link href={previousHref} className="font-semibold text-cyan-700 hover:underline">
+              上一页
+            </Link>
+          ) : (
+            <span className="text-slate-400">上一页</span>
+          )}
+          <span className="text-slate-600">
+            {page}/{totalPages}
+          </span>
+          {page < totalPages ? (
+            <Link href={nextHref} className="font-semibold text-cyan-700 hover:underline">
+              下一页
+            </Link>
+          ) : (
+            <span className="text-slate-400">下一页</span>
+          )}
+        </nav>
       </div>
     </main>
   );

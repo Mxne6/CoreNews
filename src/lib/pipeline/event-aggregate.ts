@@ -1,5 +1,6 @@
 import { clusterArticlesBySimilarity } from "@/lib/pipeline/cluster";
 import { buildContentHash } from "@/lib/pipeline/normalize";
+import { resolveAmbiguousGroups, type AmbiguityResolverClient } from "@/lib/pipeline/resolve-ambiguous";
 import { computeHotScore } from "@/lib/pipeline/scoring";
 
 export type AggregationSource = {
@@ -37,20 +38,37 @@ type AggregateInput = {
   sources: AggregationSource[];
   now: Date;
   windowDays: number;
+  ambiguityResolver?: AmbiguityResolverClient | null;
+};
+
+type EventBundle = {
+  articles: AggregationArticle[];
+  canonicalTitle: string;
 };
 
 function resolvePublishedAt(article: AggregationArticle): Date {
   return new Date(article.publishedAt ?? article.publishedAtFallback);
 }
 
-export function aggregateEventsRolling(input: AggregateInput): {
+function pickCategory(articles: AggregationArticle[], sourceById: Map<number, AggregationSource>): string {
+  const categoryCounts = new Map<string, number>();
+  for (const article of articles) {
+    const category = sourceById.get(article.sourceId)?.category ?? "other";
+    categoryCounts.set(category, (categoryCounts.get(category) ?? 0) + 1);
+  }
+  return [...categoryCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "other";
+}
+
+export async function aggregateEventsRolling(input: AggregateInput): Promise<{
   events: AggregatedEvent[];
   eventMappings: EventArticleMapping[];
-} {
+}> {
   const windowStart = new Date(input.now.getTime() - input.windowDays * 24 * 3_600_000);
   const sourceById = new Map(input.sources.map((item) => [item.id, item]));
 
   const candidates = input.articles.filter((article) => resolvePublishedAt(article) >= windowStart);
+  const candidateById = new Map(candidates.map((article) => [String(article.id), article]));
+
   const groups = clusterArticlesBySimilarity(
     candidates.map((article) => ({
       id: String(article.id),
@@ -60,60 +78,98 @@ export function aggregateEventsRolling(input: AggregateInput): {
     })),
   );
 
-  const events: AggregatedEvent[] = [];
-  const eventMappings: EventArticleMapping[] = [];
+  const resolvedByGroupId = new Map<string, { canonicalTitle: string; merged: boolean }>();
+  if (input.ambiguityResolver) {
+    const ambiguous = groups
+      .filter((group) => group.ambiguous)
+      .map((group) => ({
+        groupId: group.groupId,
+        ambiguous: true,
+        articles: group.articles.map((article) => ({
+          id: article.id,
+          normalizedTitle: article.normalizedTitle,
+        })),
+      }));
+    if (ambiguous.length > 0) {
+      const resolved = await resolveAmbiguousGroups(ambiguous, input.ambiguityResolver);
+      for (const item of resolved) {
+        resolvedByGroupId.set(item.groupId, {
+          canonicalTitle: item.canonicalTitle,
+          merged: item.merged,
+        });
+      }
+    }
+  }
 
+  const bundles: EventBundle[] = [];
   for (const group of groups) {
     const groupArticles = group.articles
-      .map((item) => candidates.find((candidate) => String(candidate.id) === item.id))
+      .map((item) => candidateById.get(item.id))
       .filter((item): item is AggregationArticle => Boolean(item));
     if (groupArticles.length === 0) {
       continue;
     }
 
-    const categoryCounts = new Map<string, number>();
-    let authorityWeightSum = 0;
-    for (const article of groupArticles) {
-      const source = sourceById.get(article.sourceId);
-      const category = source?.category ?? "other";
-      categoryCounts.set(category, (categoryCounts.get(category) ?? 0) + 1);
-      authorityWeightSum += source?.authorityWeight ?? 1;
+    const resolution = resolvedByGroupId.get(group.groupId);
+    if (resolution && !resolution.merged) {
+      for (const article of groupArticles) {
+        bundles.push({
+          articles: [article],
+          canonicalTitle: article.title,
+        });
+      }
+      continue;
     }
-    const sortedCategories = [...categoryCounts.entries()].sort((a, b) => b[1] - a[1]);
-    const category = sortedCategories[0]?.[0] ?? "other";
 
-    const publishedTimes = groupArticles
+    bundles.push({
+      articles: groupArticles,
+      canonicalTitle: resolution?.canonicalTitle?.trim() || groupArticles[0].title,
+    });
+  }
+
+  const events: AggregatedEvent[] = [];
+  const eventMappings: EventArticleMapping[] = [];
+
+  for (const bundle of bundles) {
+    const category = pickCategory(bundle.articles, sourceById);
+    const authorityWeightSum = bundle.articles.reduce(
+      (sum, article) => sum + (sourceById.get(article.sourceId)?.authorityWeight ?? 1),
+      0,
+    );
+    const coverageCount = new Set(bundle.articles.map((article) => article.sourceId)).size;
+
+    const publishedTimes = bundle.articles
       .map(resolvePublishedAt)
       .sort((a, b) => a.getTime() - b.getTime());
     const firstPublishedAt = publishedTimes[0];
     const lastPublishedAt = publishedTimes[publishedTimes.length - 1];
 
-    const canonicalTitle = groupArticles[0].title;
+    const stableAnchor = bundle.articles[0];
     const eventStableKey = buildContentHash(
-      `${category}|${groupArticles[0].normalizedTitle}|${firstPublishedAt.toISOString().slice(0, 10)}`,
+      `${category}|${stableAnchor.normalizedTitle}|${firstPublishedAt.toISOString().slice(0, 10)}`,
     );
-    const coverageCount = new Set(groupArticles.map((item) => item.sourceId)).size;
     const hotScore = computeHotScore({
       category,
       coverageCount,
       authorityWeightSum,
-      articleCount: groupArticles.length,
+      articleCount: bundle.articles.length,
       lastPublishedAt,
       now: input.now,
     });
 
     events.push({
       eventStableKey,
-      canonicalTitle,
+      canonicalTitle: bundle.canonicalTitle,
       category,
       hotScore,
-      articleCount: groupArticles.length,
+      articleCount: bundle.articles.length,
       firstPublishedAt: firstPublishedAt.toISOString(),
       lastPublishedAt: lastPublishedAt.toISOString(),
     });
+
     eventMappings.push({
       eventStableKey,
-      articleIds: groupArticles.map((item) => item.id),
+      articleIds: bundle.articles.map((article) => article.id),
     });
   }
 

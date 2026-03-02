@@ -28,11 +28,13 @@ type ArticleSourceRow = {
 
 type SourceWeightRow = {
   id: number;
+  name: string;
   authority_weight: number | null;
 };
 
 type DetailSourceItem = {
   sourceId: number;
+  sourceName: string;
   url: string;
   title: string;
   publishedAt: string | null;
@@ -161,6 +163,7 @@ export async function readNewsDetail(eventId: string) {
       const articleIds = ((mappings ?? []) as EventArticleMappingRow[]).map((item) => item.article_id);
       let sources: Array<{
         sourceId: number;
+        sourceName: string;
         url: string;
         title: string;
         publishedAt: string | null;
@@ -179,22 +182,26 @@ export async function readNewsDetail(eventId: string) {
         const sourceIds = [...new Set(articleRows.map((item) => item.source_id))];
         const { data: sourceRows } = await client
           .from("sources")
-          .select("id,authority_weight")
+          .select("id,name,authority_weight")
           .in("id", sourceIds);
-        const weightBySource = new Map<number, number>(
+        const sourceMetaById = new Map<number, { name: string; authorityWeight: number }>(
           ((sourceRows ?? []) as SourceWeightRow[]).map((item) => [
             item.id,
-            Number(item.authority_weight ?? 1),
+            {
+              name: item.name,
+              authorityWeight: Number(item.authority_weight ?? 1),
+            },
           ]),
         );
 
         sources = articleRows
           .map((item): DetailSourceItem => ({
             sourceId: item.source_id,
+            sourceName: sourceMetaById.get(item.source_id)?.name ?? `source-${item.source_id}`,
             url: String(item.url),
             title: String(item.title),
             publishedAt: item.published_at ?? null,
-            authorityWeight: weightBySource.get(item.source_id) ?? 1,
+            authorityWeight: sourceMetaById.get(item.source_id)?.authorityWeight ?? 1,
           }))
           .sort((a, b) => {
             if (b.authorityWeight !== a.authorityWeight) {
@@ -227,6 +234,7 @@ export async function readNewsDetail(eventId: string) {
     .filter((item): item is NonNullable<typeof item> => Boolean(item))
     .map((item) => ({
       sourceId: item.sourceId,
+      sourceName: `source-${item.sourceId}`,
       url: item.url,
       title: item.title,
       publishedAt: item.publishedAt.toISOString(),

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DashScopeClient } from "@/lib/llm/dashscope";
 import {
   aggregateEventsRolling,
   type AggregationArticle,
@@ -41,8 +42,8 @@ const articles: AggregationArticle[] = [
 ];
 
 describe("aggregateEventsRolling", () => {
-  it("processes only rolling 3-day window", () => {
-    const result = aggregateEventsRolling({ articles, sources, now, windowDays: 3 });
+  it("processes only rolling 3-day window", async () => {
+    const result = await aggregateEventsRolling({ articles, sources, now, windowDays: 3 });
     const allMappedArticleIds = result.eventMappings.flatMap((item) => item.articleIds);
 
     expect(allMappedArticleIds).toContain(11);
@@ -50,10 +51,26 @@ describe("aggregateEventsRolling", () => {
     expect(allMappedArticleIds).not.toContain(13);
   });
 
-  it("generates stable event keys for reruns", () => {
-    const first = aggregateEventsRolling({ articles, sources, now, windowDays: 3 });
-    const second = aggregateEventsRolling({ articles, sources, now, windowDays: 3 });
+  it("generates stable event keys for reruns", async () => {
+    const first = await aggregateEventsRolling({ articles, sources, now, windowDays: 3 });
+    const second = await aggregateEventsRolling({ articles, sources, now, windowDays: 3 });
 
     expect(first.events[0].eventStableKey).toBe(second.events[0].eventStableKey);
+  });
+
+  it("splits ambiguous group when resolver decides not to merge", async () => {
+    const resolver = new DashScopeClient("fake");
+    resolver.resolveGroup = async () => ({ canonicalTitle: "", merged: false });
+
+    const result = await aggregateEventsRolling({
+      articles,
+      sources,
+      now,
+      windowDays: 3,
+      ambiguityResolver: resolver,
+    });
+
+    expect(result.events).toHaveLength(2);
+    expect(result.eventMappings.every((item) => item.articleIds.length === 1)).toBe(true);
   });
 });

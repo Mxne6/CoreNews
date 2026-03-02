@@ -12,6 +12,7 @@ import { buildSnapshotRows, type SnapshotEvent } from "@/lib/pipeline/snapshot-b
 import { fetchRss } from "@/lib/rss/fetch-rss";
 
 type SupabaseClient = ReturnType<typeof getSupabaseAdminClient>;
+type AggregationResult = Awaited<ReturnType<typeof aggregateEventsRolling>>;
 
 type RecentArticleRow = {
   id: number;
@@ -74,7 +75,7 @@ async function loadRecentArticles(
 
 async function upsertEventsAndMappings(
   client: SupabaseClient,
-  aggregated: ReturnType<typeof aggregateEventsRolling>,
+  aggregated: AggregationResult,
   runId: number,
   dashScopeClient: DashScopeClient | null,
 ) {
@@ -161,7 +162,7 @@ async function upsertEventsAndMappings(
         modelName = "dashscope";
         modelVersion = `qwen-max-run-${runId}`;
       } catch {
-        // keep fallback summary
+        // Keep fallback summary.
       }
     }
 
@@ -231,7 +232,7 @@ export async function runDailySupabasePipeline(options?: {
     sourceErrors.push(...ingestResult.sourceErrors);
 
     const recentArticles = await loadRecentArticles(client, now, 3);
-    const aggregated = aggregateEventsRolling({
+    const aggregated = await aggregateEventsRolling({
       articles: recentArticles.map((article) => ({
         id: article.id,
         sourceId: article.source_id,
@@ -247,6 +248,7 @@ export async function runDailySupabasePipeline(options?: {
       })),
       now,
       windowDays: 3,
+      ambiguityResolver: dashScopeClient,
     });
 
     const { snapshotEvents } = await upsertEventsAndMappings(
@@ -278,11 +280,7 @@ export async function runDailySupabasePipeline(options?: {
     };
   } catch (error) {
     if (runId > 0) {
-      await repository.finishPipelineRunFailure(
-        runId,
-        (error as Error).message,
-        sourceErrors,
-      );
+      await repository.finishPipelineRunFailure(runId, (error as Error).message, sourceErrors);
     }
     throw error;
   }

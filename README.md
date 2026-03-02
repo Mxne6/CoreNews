@@ -58,4 +58,19 @@ npx playwright test e2e/daily-smoke.spec.ts
 ## Supabase Schema
 
 - Migration: `supabase/migrations/2026030201_core_news_schema.sql`
+- Migration: `supabase/migrations/2026030202_pipeline_stability.sql`
 - Seed: `supabase/seed.sql`
+
+## Supabase Bootstrap + Health
+
+Use this helper script to check schema readiness, upsert source seeds, optionally trigger daily cron once, and print latest pipeline status:
+
+```bash
+npm run ops:supabase
+```
+
+Optional first-run trigger:
+
+```bash
+npm run ops:supabase -- --trigger-url=https://<your-vercel-domain>/api/cron/daily
+```

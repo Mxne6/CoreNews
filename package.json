@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --coverage",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "ops:supabase": "node scripts/ops/supabase-bootstrap-health.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.98.0",

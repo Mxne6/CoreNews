@@ -44,7 +44,7 @@ describe("GET /api/news/[eventId]", () => {
       id: string;
       title: string;
       summaryCn: string;
-      sources: Array<{ url: string }>;
+      sources: Array<{ url: string; sourceName: string }>;
     };
 
     expect(response.status).toBe(200);
@@ -52,6 +52,7 @@ describe("GET /api/news/[eventId]", () => {
     expect(body.title).toBe("OpenAI releases GPT-5");
     expect(body.summaryCn).toBe("这是摘要");
     expect(body.sources[0].url).toBe("https://example.com/a1");
+    expect(body.sources[0].sourceName).toBe("source-1");
   });
 
   it("returns 404 when event is missing", async () => {

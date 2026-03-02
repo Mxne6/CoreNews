@@ -85,7 +85,7 @@ export class DashScopeClient implements AmbiguityResolverClient {
       {
         role: "user",
         content:
-          `请用中文总结该热点事件，控制在60字以内，不要添加“据报道”等套话。\n` +
+          `请用中文总结该热点事件，控制在 60 字以内，不要添加“据报道”等套话。\n` +
           `标题: ${input.title}\n` +
           `分类: ${input.category}\n` +
           `报道数量: ${input.articleCount}`,
