@@ -10,6 +10,7 @@ const eslintConfig = defineConfig([
     // Default ignores of eslint-config-next:
     ".next/**",
     "core-news-app/**",
+    "coverage/**",
     "out/**",
     "build/**",
     "next-env.d.ts",
