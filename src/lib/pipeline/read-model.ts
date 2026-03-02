@@ -14,6 +14,31 @@ type RunRow = {
   source_errors_json: unknown;
 };
 
+type EventArticleMappingRow = {
+  article_id: number;
+};
+
+type ArticleSourceRow = {
+  id: number;
+  source_id: number;
+  url: string;
+  title: string;
+  published_at: string | null;
+};
+
+type SourceWeightRow = {
+  id: number;
+  authority_weight: number | null;
+};
+
+type DetailSourceItem = {
+  sourceId: number;
+  url: string;
+  title: string;
+  publishedAt: string | null;
+  authorityWeight: number;
+};
+
 async function getLatestSuccessfulRunId() {
   const client = getSupabaseAdminClient();
   const { data, error } = await client
@@ -149,7 +174,7 @@ export async function readNewsDetail(eventId: string) {
     throw new Error(`load_event_articles_failed: ${mappingError.message}`);
   }
 
-  const articleIds = (mappings ?? []).map((item: any) => item.article_id as number);
+  const articleIds = ((mappings ?? []) as EventArticleMappingRow[]).map((item) => item.article_id);
   let sources: Array<{
     sourceId: number;
     url: string;
@@ -166,24 +191,28 @@ export async function readNewsDetail(eventId: string) {
       throw new Error(`load_articles_failed: ${articleError.message}`);
     }
 
-    const sourceIds = [...new Set((articles ?? []).map((item: any) => item.source_id as number))];
+    const articleRows = (articles ?? []) as ArticleSourceRow[];
+    const sourceIds = [...new Set(articleRows.map((item) => item.source_id))];
     const { data: sourceRows } = await client
       .from("sources")
       .select("id,authority_weight")
       .in("id", sourceIds);
     const weightBySource = new Map<number, number>(
-      (sourceRows ?? []).map((item: any) => [item.id as number, Number(item.authority_weight ?? 1)]),
+      ((sourceRows ?? []) as SourceWeightRow[]).map((item) => [
+        item.id,
+        Number(item.authority_weight ?? 1),
+      ]),
     );
 
-    sources = (articles ?? [])
-      .map((item: any) => ({
-        sourceId: item.source_id as number,
+    sources = articleRows
+      .map((item): DetailSourceItem => ({
+        sourceId: item.source_id,
         url: String(item.url),
         title: String(item.title),
-        publishedAt: (item.published_at as string | null) ?? null,
-        authorityWeight: weightBySource.get(item.source_id as number) ?? 1,
+        publishedAt: item.published_at ?? null,
+        authorityWeight: weightBySource.get(item.source_id) ?? 1,
       }))
-      .sort((a: any, b: any) => {
+      .sort((a, b) => {
         if (b.authorityWeight !== a.authorityWeight) {
           return b.authorityWeight - a.authorityWeight;
         }

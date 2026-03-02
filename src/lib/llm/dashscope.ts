@@ -6,10 +6,32 @@ type DashScopeMessage = {
 };
 
 type DashScopeResponse = {
-  output?: {
-    text?: string;
-  };
+  output?: { text?: string } | Array<{ content?: Array<{ type?: string; text?: string }> }>;
+  choices?: Array<{ message?: { content?: string } }>;
 };
+
+export function extractDashScopeText(payload: DashScopeResponse): string {
+  const directText = (payload.output as { text?: string } | undefined)?.text;
+  if (typeof directText === "string" && directText.trim().length > 0) {
+    return directText.trim();
+  }
+
+  const choiceText = payload.choices?.[0]?.message?.content;
+  if (typeof choiceText === "string" && choiceText.trim().length > 0) {
+    return choiceText.trim();
+  }
+
+  const outputItems = Array.isArray(payload.output) ? payload.output : [];
+  for (const item of outputItems) {
+    for (const content of item.content ?? []) {
+      if (typeof content.text === "string" && content.text.trim().length > 0) {
+        return content.text.trim();
+      }
+    }
+  }
+
+  return "";
+}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -50,6 +72,29 @@ export class DashScopeClient implements AmbiguityResolverClient {
     }
   }
 
+  async summarizeEvent(input: {
+    title: string;
+    category: string;
+    articleCount: number;
+  }): Promise<string> {
+    const messages: DashScopeMessage[] = [
+      {
+        role: "system",
+        content: "You are a concise Chinese news editor. Return only one short Chinese summary.",
+      },
+      {
+        role: "user",
+        content:
+          `请用中文总结该热点事件，控制在60字以内，不要添加“据报道”等套话。\n` +
+          `标题: ${input.title}\n` +
+          `分类: ${input.category}\n` +
+          `报道数量: ${input.articleCount}`,
+      },
+    ];
+
+    return this.requestWithRetry(messages, 3);
+  }
+
   private async requestWithRetry(messages: DashScopeMessage[], maxRetries: number): Promise<string> {
     let lastError: Error | null = null;
     for (let attempt = 0; attempt < maxRetries; attempt += 1) {
@@ -78,7 +123,7 @@ export class DashScopeClient implements AmbiguityResolverClient {
         }
 
         const payload = (await response.json()) as DashScopeResponse;
-        const text = payload.output?.text?.trim() ?? "";
+        const text = extractDashScopeText(payload);
         if (!text) {
           throw new Error("empty");
         }

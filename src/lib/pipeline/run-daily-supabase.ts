@@ -1,7 +1,8 @@
-import { hasRequiredEnv } from "@/lib/config/env";
+import { getEnv, hasRequiredEnv } from "@/lib/config/env";
 import { getSupabaseAdminClient } from "@/lib/db/supabase-admin";
-import { aggregateEventsRolling } from "@/lib/pipeline/event-aggregate";
+import { DashScopeClient } from "@/lib/llm/dashscope";
 import { ingestArticlesFromSources, type ActiveSource } from "@/lib/pipeline/article-ingest";
+import { aggregateEventsRolling } from "@/lib/pipeline/event-aggregate";
 import {
   createPipelineRepository,
   type PipelineRunMetrics,
@@ -12,18 +13,6 @@ import { fetchRss } from "@/lib/rss/fetch-rss";
 
 type SupabaseClient = ReturnType<typeof getSupabaseAdminClient>;
 
-async function loadActiveSources(client: SupabaseClient): Promise<ActiveSource[]> {
-  const { data, error } = await client
-    .from("sources")
-    .select("id,rss_url,category,authority_weight")
-    .eq("is_active", true);
-
-  if (error) {
-    throw new Error(`load_active_sources_failed: ${error.message}`);
-  }
-  return (data ?? []) as ActiveSource[];
-}
-
 type RecentArticleRow = {
   id: number;
   source_id: number;
@@ -33,7 +22,43 @@ type RecentArticleRow = {
   published_at_fallback: string;
 };
 
-async function loadRecentArticles(client: SupabaseClient, now: Date, windowDays: number) {
+type UpsertedEventRow = {
+  id: number;
+  event_stable_key: string;
+  canonical_title: string;
+  category: string;
+  hot_score: number;
+  article_count: number;
+};
+
+function buildFallbackSummary(articleCount: number): string {
+  return `This event has ${articleCount} related reports in the last 24-72 hours.`;
+}
+
+function createDashScopeClientOrNull() {
+  const key = getEnv().DASHSCOPE_API_KEY?.trim();
+  if (!key) {
+    return null;
+  }
+  return new DashScopeClient(key, "qwen-max");
+}
+
+async function loadActiveSources(client: SupabaseClient): Promise<ActiveSource[]> {
+  const { data, error } = await client
+    .from("sources")
+    .select("id,rss_url,category,authority_weight")
+    .eq("is_active", true);
+  if (error) {
+    throw new Error(`load_active_sources_failed: ${error.message}`);
+  }
+  return (data ?? []) as ActiveSource[];
+}
+
+async function loadRecentArticles(
+  client: SupabaseClient,
+  now: Date,
+  windowDays: number,
+): Promise<RecentArticleRow[]> {
   const since = new Date(now.getTime() - windowDays * 24 * 3_600_000).toISOString();
   const { data, error } = await client
     .from("articles")
@@ -41,27 +66,23 @@ async function loadRecentArticles(client: SupabaseClient, now: Date, windowDays:
     .gte("fetched_at", since)
     .order("fetched_at", { ascending: false })
     .limit(5000);
-
   if (error) {
     throw new Error(`load_recent_articles_failed: ${error.message}`);
   }
   return (data ?? []) as RecentArticleRow[];
 }
 
-function buildSummary(articleCount: number): string {
-  return `该事件在近24-72小时由 ${articleCount} 条报道提及，请查看原文了解详细背景。`;
-}
-
 async function upsertEventsAndMappings(
   client: SupabaseClient,
   aggregated: ReturnType<typeof aggregateEventsRolling>,
   runId: number,
+  dashScopeClient: DashScopeClient | null,
 ) {
   if (aggregated.events.length === 0) {
-    return { eventByStableKey: new Map<string, number>(), snapshotEvents: [] as SnapshotEvent[] };
+    return { snapshotEvents: [] as SnapshotEvent[] };
   }
 
-  const eventsPayload = aggregated.events.map((event) => ({
+  const eventPayload = aggregated.events.map((event) => ({
     event_stable_key: event.eventStableKey,
     canonical_title: event.canonicalTitle,
     category: event.category,
@@ -78,19 +99,19 @@ async function upsertEventsAndMappings(
 
   const { data: upsertedEvents, error: eventError } = await client
     .from("events")
-    .upsert(eventsPayload, { onConflict: "event_stable_key" })
+    .upsert(eventPayload, { onConflict: "event_stable_key" })
     .select("id,event_stable_key,canonical_title,category,hot_score,article_count");
   if (eventError) {
     throw new Error(`upsert_events_failed: ${eventError.message}`);
   }
 
-  const eventByStableKey = new Map<string, number>();
+  const eventIdByStableKey = new Map<string, number>();
   for (const event of upsertedEvents ?? []) {
-    eventByStableKey.set(event.event_stable_key as string, event.id as number);
+    eventIdByStableKey.set(event.event_stable_key as string, event.id as number);
   }
 
-  const mappings = aggregated.eventMappings.flatMap((mapping) => {
-    const eventId = eventByStableKey.get(mapping.eventStableKey);
+  const eventArticleRows = aggregated.eventMappings.flatMap((mapping) => {
+    const eventId = eventIdByStableKey.get(mapping.eventStableKey);
     if (!eventId) {
       return [];
     }
@@ -99,23 +120,60 @@ async function upsertEventsAndMappings(
       article_id: articleId,
     }));
   });
-
-  if (mappings.length > 0) {
+  if (eventArticleRows.length > 0) {
     const { error: mappingError } = await client
       .from("event_articles")
-      .upsert(mappings, { onConflict: "event_id,article_id" });
+      .upsert(eventArticleRows, { onConflict: "event_id,article_id" });
     if (mappingError) {
       throw new Error(`upsert_event_articles_failed: ${mappingError.message}`);
     }
   }
 
-  const summaryRows = (upsertedEvents ?? []).map((event: any) => ({
-    event_id: event.id,
-    summary_cn: buildSummary(Number(event.article_count ?? 0)),
-    model_name: "rule-fallback",
-    model_version: `rule-fallback-${runId}`,
-    summary_version: `run-${runId}`,
-  }));
+  const aggregatedByStableKey = new Map(
+    aggregated.events.map((event) => [event.eventStableKey, event]),
+  );
+  const summaryRows: Array<{
+    event_id: number;
+    summary_cn: string;
+    model_name: string;
+    model_version: string;
+    summary_version: string;
+  }> = [];
+  const summaryByEventId = new Map<number, string>();
+
+  for (const event of upsertedEvents ?? []) {
+    const eventId = Number(event.id);
+    const stableKey = String(event.event_stable_key);
+    const info = aggregatedByStableKey.get(stableKey);
+    const fallback = buildFallbackSummary(Number(event.article_count ?? 0));
+
+    let summary = fallback;
+    let modelName = "rule-fallback";
+    let modelVersion = `rule-fallback-${runId}`;
+
+    if (dashScopeClient && info) {
+      try {
+        summary = await dashScopeClient.summarizeEvent({
+          title: info.canonicalTitle,
+          category: info.category,
+          articleCount: info.articleCount,
+        });
+        modelName = "dashscope";
+        modelVersion = `qwen-max-run-${runId}`;
+      } catch {
+        // keep fallback summary
+      }
+    }
+
+    summaryRows.push({
+      event_id: eventId,
+      summary_cn: summary,
+      model_name: modelName,
+      model_version: modelVersion,
+      summary_version: `run-${runId}`,
+    });
+    summaryByEventId.set(eventId, summary);
+  }
 
   if (summaryRows.length > 0) {
     const { error: summaryError } = await client
@@ -126,16 +184,20 @@ async function upsertEventsAndMappings(
     }
   }
 
-  const snapshotEvents: SnapshotEvent[] = (upsertedEvents ?? []).map((event: any) => ({
-    id: String(event.id),
-    category: String(event.category),
-    canonicalTitle: String(event.canonical_title),
-    hotScore: Number(event.hot_score),
-    articleCount: Number(event.article_count),
-    summaryCn: buildSummary(Number(event.article_count ?? 0)),
-  }));
+  const snapshotEvents: SnapshotEvent[] = ((upsertedEvents ?? []) as UpsertedEventRow[]).map(
+    (event) => ({
+      id: String(event.id),
+      category: String(event.category),
+      canonicalTitle: String(event.canonical_title),
+      hotScore: Number(event.hot_score),
+      articleCount: Number(event.article_count),
+      summaryCn:
+        summaryByEventId.get(Number(event.id)) ??
+        buildFallbackSummary(Number(event.article_count ?? 0)),
+    }),
+  );
 
-  return { eventByStableKey, snapshotEvents };
+  return { snapshotEvents };
 }
 
 export async function runDailySupabasePipeline(options?: {
@@ -150,6 +212,7 @@ export async function runDailySupabasePipeline(options?: {
   const trigger = options?.trigger ?? "vercel-cron";
   const client = getSupabaseAdminClient();
   const repository = createPipelineRepository(client as never);
+  const dashScopeClient = createDashScopeClientOrNull();
 
   let runId = 0;
   const sourceErrors: SourceErrorPayload[] = [];
@@ -169,13 +232,6 @@ export async function runDailySupabasePipeline(options?: {
 
     const recentArticles = await loadRecentArticles(client, now, 3);
     const aggregated = aggregateEventsRolling({
-      now,
-      windowDays: 3,
-      sources: sources.map((source) => ({
-        id: source.id,
-        category: source.category,
-        authorityWeight: source.authority_weight,
-      })),
       articles: recentArticles.map((article) => ({
         id: article.id,
         sourceId: article.source_id,
@@ -184,9 +240,21 @@ export async function runDailySupabasePipeline(options?: {
         publishedAt: article.published_at,
         publishedAtFallback: article.published_at_fallback ?? now.toISOString(),
       })),
+      sources: sources.map((source) => ({
+        id: source.id,
+        category: source.category,
+        authorityWeight: source.authority_weight,
+      })),
+      now,
+      windowDays: 3,
     });
 
-    const { snapshotEvents } = await upsertEventsAndMappings(client, aggregated, runId);
+    const { snapshotEvents } = await upsertEventsAndMappings(
+      client,
+      aggregated,
+      runId,
+      dashScopeClient,
+    );
     const snapshotRows = buildSnapshotRows(runId, snapshotEvents, now.toISOString(), "v1");
     const { error: snapshotError } = await client
       .from("snapshots")
