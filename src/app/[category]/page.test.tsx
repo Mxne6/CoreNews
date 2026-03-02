@@ -1,20 +1,24 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import CategoryPage from "@/app/[category]/page";
-import { defaultPipelineStore } from "@/lib/pipeline/run-daily";
+
+const readCategorySnapshotMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/pipeline/read-model", () => ({
+  readCategorySnapshot: readCategorySnapshotMock,
+}));
 
 beforeEach(() => {
-  defaultPipelineStore.snapshots.length = 0;
-  defaultPipelineStore.snapshots.push({
-    generatedAt: new Date("2026-03-02T00:00:00.000Z"),
-    homePayload: {},
-    categoryPayloads: {
-      ai: Array.from({ length: 7 }).map((_, index) => ({
-        id: `ai:event-${index + 1}`,
-        canonicalTitle: `AI Event ${index + 1}`,
-        hotScore: 90 - index,
-      })),
-    },
+  readCategorySnapshotMock.mockReset();
+  readCategorySnapshotMock.mockResolvedValue({
+    category: "ai",
+    page: 2,
+    pageSize: 5,
+    total: 7,
+    events: [
+      { id: "ai:event-6", canonicalTitle: "AI Event 6", hotScore: 84 },
+      { id: "ai:event-7", canonicalTitle: "AI Event 7", hotScore: 83 },
+    ],
   });
 });
 

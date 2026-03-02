@@ -1,5 +1,7 @@
 import { CategorySection } from "@/components/category-section";
-import { defaultPipelineStore } from "@/lib/pipeline/run-daily";
+import { readHomeSnapshot } from "@/lib/pipeline/read-model";
+
+export const dynamic = "force-dynamic";
 
 type HomeEvent = {
   id: string;
@@ -9,8 +11,10 @@ type HomeEvent = {
 };
 
 export default async function HomePage() {
-  const latestSnapshot = defaultPipelineStore.snapshots.at(-1);
-  const homePayload = (latestSnapshot?.homePayload ?? {}) as Record<string, HomeEvent[]>;
+  const snapshot = await readHomeSnapshot();
+  const homePayload = Object.fromEntries(
+    snapshot.sections.map((section) => [section.category, section.events as HomeEvent[]]),
+  );
   const fallbackCategories: Array<[string, HomeEvent[]]> = [
     [
       "ai",
@@ -32,7 +36,7 @@ export default async function HomePage() {
       <div className="mx-auto max-w-5xl space-y-6">
         <header className="space-y-2">
           <h1 className="text-3xl font-black tracking-tight text-slate-900">CoreNews</h1>
-          <p className="text-sm text-slate-600">Daily hotspot snapshot for fast reading.</p>
+          <p className="text-sm text-slate-600">每日热点快照，2-3 分钟快速读完。</p>
         </header>
         <div className="grid gap-5">
           {sections.map(([category, events]) => (

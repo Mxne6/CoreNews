@@ -1,5 +1,7 @@
 import { NewsCard } from "@/components/news-card";
-import { defaultPipelineStore } from "@/lib/pipeline/run-daily";
+import { readCategorySnapshot } from "@/lib/pipeline/read-model";
+
+export const dynamic = "force-dynamic";
 
 type CategoryPageProps = {
   params: Promise<{ category: string }>;
@@ -23,11 +25,9 @@ export default async function CategoryPage({
   const { page: pageRaw } = await searchParams;
   const page = Math.max(1, Number(pageRaw ?? "1"));
 
-  const latestSnapshot = defaultPipelineStore.snapshots.at(-1);
-  const categoryPayloads = (latestSnapshot?.categoryPayloads ?? {}) as Record<
-    string,
-    CategoryEvent[]
-  >;
+  const categorySnapshot = await readCategorySnapshot(category, page, PAGE_SIZE);
+  const snapshotEvents = categorySnapshot.events as CategoryEvent[];
+
   const fallbackEvents: CategoryEvent[] = [
     {
       id: "ai-openai-releases-gpt-5",
@@ -36,14 +36,14 @@ export default async function CategoryPage({
       hotScore: 88.2,
     },
   ];
-  const allEvents =
-    categoryPayloads[category] && categoryPayloads[category].length > 0
-      ? categoryPayloads[category]
-      : category === "ai"
+
+  const events =
+    snapshotEvents.length > 0
+      ? snapshotEvents
+      : category === "ai" && page === 1
         ? fallbackEvents
         : [];
-  const start = (page - 1) * PAGE_SIZE;
-  const events = allEvents.slice(start, start + PAGE_SIZE);
+  const total = categorySnapshot.total > 0 ? categorySnapshot.total : events.length;
 
   return (
     <main className="min-h-screen bg-slate-100 px-6 py-10">
@@ -51,7 +51,7 @@ export default async function CategoryPage({
         <header className="rounded-xl bg-white p-5 shadow-sm">
           <h1 className="text-2xl font-bold text-slate-900">{category} 热点</h1>
           <p className="mt-1 text-sm text-slate-600">
-            Page {page}, showing {events.length} of {allEvents.length} events.
+            第 {page} 页，当前显示 {events.length} 条，共 {total} 条。
           </p>
         </header>
         <div className="grid gap-3">

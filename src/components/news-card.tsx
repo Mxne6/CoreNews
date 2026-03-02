@@ -17,7 +17,7 @@ export function NewsCard({ id, title, summaryCn, hotScore }: NewsCardProps) {
       </h3>
       {summaryCn ? <p className="mt-2 text-sm text-slate-600">{summaryCn}</p> : null}
       {typeof hotScore === "number" ? (
-        <p className="mt-3 text-xs text-slate-500">热度分 {hotScore.toFixed(1)}</p>
+        <p className="mt-3 text-xs text-slate-500">热度值 {hotScore.toFixed(1)}</p>
       ) : null}
     </article>
   );

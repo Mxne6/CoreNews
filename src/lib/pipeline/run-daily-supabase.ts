@@ -32,7 +32,7 @@ type UpsertedEventRow = {
 };
 
 function buildFallbackSummary(articleCount: number): string {
-  return `This event has ${articleCount} related reports in the last 24-72 hours.`;
+  return `该事件在近 24-72 小时内有 ${articleCount} 条相关报道。`;
 }
 
 function createDashScopeClientOrNull() {

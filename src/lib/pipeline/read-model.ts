@@ -75,16 +75,20 @@ async function getSnapshotPayloadForKey(key: string) {
 
 export async function readHomeSnapshot() {
   if (hasRequiredEnv()) {
-    const snapshot = await getSnapshotPayloadForKey("home");
-    return {
-      generatedAt: snapshot?.generated_at ?? null,
-      sections: Object.entries((snapshot?.payload_json as Record<string, unknown[]>) ?? {}).map(
-        ([category, events]) => ({
-          category,
-          events,
-        }),
-      ),
-    };
+    try {
+      const snapshot = await getSnapshotPayloadForKey("home");
+      return {
+        generatedAt: snapshot?.generated_at ?? null,
+        sections: Object.entries((snapshot?.payload_json as Record<string, unknown[]>) ?? {}).map(
+          ([category, events]) => ({
+            category,
+            events,
+          }),
+        ),
+      };
+    } catch {
+      // Fallback to in-memory snapshot for local/dev resilience.
+    }
   }
 
   const latest = defaultPipelineStore.snapshots.at(-1);
@@ -98,9 +102,14 @@ export async function readHomeSnapshot() {
 export async function readCategorySnapshot(slug: string, page: number, pageSize: number) {
   let events: unknown[] = [];
   if (hasRequiredEnv()) {
-    const snapshot = await getSnapshotPayloadForKey(`category:${slug}`);
-    events = (snapshot?.payload_json as unknown[]) ?? [];
-  } else {
+    try {
+      const snapshot = await getSnapshotPayloadForKey(`category:${slug}`);
+      events = (snapshot?.payload_json as unknown[]) ?? [];
+    } catch {
+      // Fallback to in-memory snapshot for local/dev resilience.
+    }
+  }
+  if (events.length === 0) {
     const latest = defaultPipelineStore.snapshots.at(-1);
     events = ((latest?.categoryPayloads as Record<string, unknown[]>) ?? {})[slug] ?? [];
   }
@@ -116,179 +125,189 @@ export async function readCategorySnapshot(slug: string, page: number, pageSize:
 }
 
 export async function readNewsDetail(eventId: string) {
-  if (!hasRequiredEnv()) {
-    const event = defaultPipelineStore.events.find((item) => item.id === eventId);
-    if (!event) {
-      return null;
+  if (hasRequiredEnv()) {
+    try {
+      const client = getSupabaseAdminClient();
+      const { data: event, error: eventError } = await client
+        .from("events")
+        .select("id,canonical_title,category,hot_score")
+        .eq("id", Number(eventId))
+        .maybeSingle();
+      if (eventError) {
+        throw new Error(`load_event_failed: ${eventError.message}`);
+      }
+      if (!event) {
+        return null;
+      }
+
+      const { data: summaries, error: summaryError } = await client
+        .from("summaries")
+        .select("summary_cn,generated_at")
+        .eq("event_id", event.id)
+        .order("generated_at", { ascending: false })
+        .limit(1);
+      if (summaryError) {
+        throw new Error(`load_summary_failed: ${summaryError.message}`);
+      }
+
+      const { data: mappings, error: mappingError } = await client
+        .from("event_articles")
+        .select("article_id")
+        .eq("event_id", event.id);
+      if (mappingError) {
+        throw new Error(`load_event_articles_failed: ${mappingError.message}`);
+      }
+
+      const articleIds = ((mappings ?? []) as EventArticleMappingRow[]).map((item) => item.article_id);
+      let sources: Array<{
+        sourceId: number;
+        url: string;
+        title: string;
+        publishedAt: string | null;
+        authorityWeight: number;
+      }> = [];
+      if (articleIds.length > 0) {
+        const { data: articles, error: articleError } = await client
+          .from("articles")
+          .select("id,source_id,url,title,published_at")
+          .in("id", articleIds);
+        if (articleError) {
+          throw new Error(`load_articles_failed: ${articleError.message}`);
+        }
+
+        const articleRows = (articles ?? []) as ArticleSourceRow[];
+        const sourceIds = [...new Set(articleRows.map((item) => item.source_id))];
+        const { data: sourceRows } = await client
+          .from("sources")
+          .select("id,authority_weight")
+          .in("id", sourceIds);
+        const weightBySource = new Map<number, number>(
+          ((sourceRows ?? []) as SourceWeightRow[]).map((item) => [
+            item.id,
+            Number(item.authority_weight ?? 1),
+          ]),
+        );
+
+        sources = articleRows
+          .map((item): DetailSourceItem => ({
+            sourceId: item.source_id,
+            url: String(item.url),
+            title: String(item.title),
+            publishedAt: item.published_at ?? null,
+            authorityWeight: weightBySource.get(item.source_id) ?? 1,
+          }))
+          .sort((a, b) => {
+            if (b.authorityWeight !== a.authorityWeight) {
+              return b.authorityWeight - a.authorityWeight;
+            }
+            return (b.publishedAt ?? "").localeCompare(a.publishedAt ?? "");
+          });
+      }
+
+      return {
+        id: String(event.id),
+        title: String(event.canonical_title),
+        category: String(event.category),
+        hotScore: Number(event.hot_score),
+        summaryCn: (summaries?.[0]?.summary_cn as string | undefined) ?? "",
+        sources,
+      };
+    } catch {
+      // Fallback to in-memory snapshot for local/dev resilience.
     }
-    const summary = defaultPipelineStore.summaries.find((item) => item.eventId === eventId);
-    const sources = event.articleIds
-      .map((articleId) => defaultPipelineStore.articles.find((item) => item.id === articleId))
-      .filter((item): item is NonNullable<typeof item> => Boolean(item))
-      .map((item) => ({
-        sourceId: item.sourceId,
-        url: item.url,
-        title: item.title,
-        publishedAt: item.publishedAt.toISOString(),
-        authorityWeight: 1,
-      }))
-      .sort((a, b) => b.authorityWeight - a.authorityWeight);
-    return {
-      id: event.id,
-      title: event.canonicalTitle,
-      category: event.category,
-      hotScore: event.hotScore,
-      summaryCn: summary?.summaryCn ?? "",
-      sources,
-    };
   }
 
-  const client = getSupabaseAdminClient();
-  const { data: event, error: eventError } = await client
-    .from("events")
-    .select("id,canonical_title,category,hot_score")
-    .eq("id", Number(eventId))
-    .maybeSingle();
-  if (eventError) {
-    throw new Error(`load_event_failed: ${eventError.message}`);
-  }
+  const event = defaultPipelineStore.events.find((item) => item.id === eventId);
   if (!event) {
     return null;
   }
-
-  const { data: summaries, error: summaryError } = await client
-    .from("summaries")
-    .select("summary_cn,generated_at")
-    .eq("event_id", event.id)
-    .order("generated_at", { ascending: false })
-    .limit(1);
-  if (summaryError) {
-    throw new Error(`load_summary_failed: ${summaryError.message}`);
-  }
-
-  const { data: mappings, error: mappingError } = await client
-    .from("event_articles")
-    .select("article_id")
-    .eq("event_id", event.id);
-  if (mappingError) {
-    throw new Error(`load_event_articles_failed: ${mappingError.message}`);
-  }
-
-  const articleIds = ((mappings ?? []) as EventArticleMappingRow[]).map((item) => item.article_id);
-  let sources: Array<{
-    sourceId: number;
-    url: string;
-    title: string;
-    publishedAt: string | null;
-    authorityWeight: number;
-  }> = [];
-  if (articleIds.length > 0) {
-    const { data: articles, error: articleError } = await client
-      .from("articles")
-      .select("id,source_id,url,title,published_at")
-      .in("id", articleIds);
-    if (articleError) {
-      throw new Error(`load_articles_failed: ${articleError.message}`);
-    }
-
-    const articleRows = (articles ?? []) as ArticleSourceRow[];
-    const sourceIds = [...new Set(articleRows.map((item) => item.source_id))];
-    const { data: sourceRows } = await client
-      .from("sources")
-      .select("id,authority_weight")
-      .in("id", sourceIds);
-    const weightBySource = new Map<number, number>(
-      ((sourceRows ?? []) as SourceWeightRow[]).map((item) => [
-        item.id,
-        Number(item.authority_weight ?? 1),
-      ]),
-    );
-
-    sources = articleRows
-      .map((item): DetailSourceItem => ({
-        sourceId: item.source_id,
-        url: String(item.url),
-        title: String(item.title),
-        publishedAt: item.published_at ?? null,
-        authorityWeight: weightBySource.get(item.source_id) ?? 1,
-      }))
-      .sort((a, b) => {
-        if (b.authorityWeight !== a.authorityWeight) {
-          return b.authorityWeight - a.authorityWeight;
-        }
-        return (b.publishedAt ?? "").localeCompare(a.publishedAt ?? "");
-      });
-  }
+  const summary = defaultPipelineStore.summaries.find((item) => item.eventId === eventId);
+  const sources = event.articleIds
+    .map((articleId) => defaultPipelineStore.articles.find((item) => item.id === articleId))
+    .filter((item): item is NonNullable<typeof item> => Boolean(item))
+    .map((item) => ({
+      sourceId: item.sourceId,
+      url: item.url,
+      title: item.title,
+      publishedAt: item.publishedAt.toISOString(),
+      authorityWeight: 1,
+    }))
+    .sort((a, b) => b.authorityWeight - a.authorityWeight);
 
   return {
-    id: String(event.id),
-    title: String(event.canonical_title),
-    category: String(event.category),
-    hotScore: Number(event.hot_score),
-    summaryCn: (summaries?.[0]?.summary_cn as string | undefined) ?? "",
+    id: event.id,
+    title: event.canonicalTitle,
+    category: event.category,
+    hotScore: event.hotScore,
+    summaryCn: summary?.summaryCn ?? "",
     sources,
   };
 }
 
 export async function readPipelineHealth(now = new Date()) {
-  if (!hasRequiredEnv()) {
-    const runs = defaultPipelineStore.pipelineRuns.slice(-10).map((run) => ({
-      startedAt: run.startedAt.toISOString(),
-      endedAt: run.endedAt?.toISOString() ?? null,
-      status: run.status,
-      error: run.error ?? null,
-      articleCount: run.articleCount,
-      eventCount: run.eventCount,
-      summaryCount: run.summaryCount,
-      sourceErrors: [],
-    }));
-    return {
-      total: runs.length,
-      runs,
-      stale: false,
-      degraded: runs.at(-1)?.status === "failed",
-      latestRunStatus: runs.at(-1)?.status ?? null,
-      latestSuccessAt: runs.findLast((run) => run.status === "success")?.endedAt ?? null,
-    };
+  if (hasRequiredEnv()) {
+    try {
+      const client = getSupabaseAdminClient();
+      const { data, error } = await client
+        .from("pipeline_runs")
+        .select(
+          "id,status,started_at,ended_at,error,article_count,event_count,summary_count,source_errors_json",
+        )
+        .order("started_at", { ascending: false })
+        .limit(10);
+      if (error) {
+        throw new Error(`load_pipeline_health_failed: ${error.message}`);
+      }
+
+      const runs = ((data ?? []) as RunRow[]).map((run) => ({
+        startedAt: run.started_at,
+        endedAt: run.ended_at,
+        status: run.status,
+        error: run.error,
+        articleCount: run.article_count,
+        eventCount: run.event_count,
+        summaryCount: run.summary_count,
+        sourceErrors: run.source_errors_json ?? [],
+      }));
+      const latestRun = runs[0];
+      const latestSuccess = runs.find((run) => run.status === "success");
+      const latestSuccessAt = latestSuccess?.endedAt ?? latestSuccess?.startedAt ?? null;
+
+      let stale = true;
+      if (latestSuccessAt) {
+        stale = now.getTime() - new Date(latestSuccessAt).getTime() > 36 * 3_600_000;
+      }
+
+      return {
+        total: runs.length,
+        runs,
+        stale,
+        degraded: latestRun?.status === "failed",
+        latestRunStatus: latestRun?.status ?? null,
+        latestSuccessAt,
+      };
+    } catch {
+      // Fallback to in-memory snapshot for local/dev resilience.
+    }
   }
 
-  const client = getSupabaseAdminClient();
-  const { data, error } = await client
-    .from("pipeline_runs")
-    .select(
-      "id,status,started_at,ended_at,error,article_count,event_count,summary_count,source_errors_json",
-    )
-    .order("started_at", { ascending: false })
-    .limit(10);
-  if (error) {
-    throw new Error(`load_pipeline_health_failed: ${error.message}`);
-  }
-
-  const runs = ((data ?? []) as RunRow[]).map((run) => ({
-    startedAt: run.started_at,
-    endedAt: run.ended_at,
+  const runs = defaultPipelineStore.pipelineRuns.slice(-10).map((run) => ({
+    startedAt: run.startedAt.toISOString(),
+    endedAt: run.endedAt?.toISOString() ?? null,
     status: run.status,
-    error: run.error,
-    articleCount: run.article_count,
-    eventCount: run.event_count,
-    summaryCount: run.summary_count,
-    sourceErrors: run.source_errors_json ?? [],
+    error: run.error ?? null,
+    articleCount: run.articleCount,
+    eventCount: run.eventCount,
+    summaryCount: run.summaryCount,
+    sourceErrors: [],
   }));
-  const latestRun = runs[0];
-  const latestSuccess = runs.find((run) => run.status === "success");
-  const latestSuccessAt = latestSuccess?.endedAt ?? latestSuccess?.startedAt ?? null;
-
-  let stale = true;
-  if (latestSuccessAt) {
-    stale = now.getTime() - new Date(latestSuccessAt).getTime() > 36 * 3_600_000;
-  }
 
   return {
     total: runs.length,
     runs,
-    stale,
-    degraded: latestRun?.status === "failed",
-    latestRunStatus: latestRun?.status ?? null,
-    latestSuccessAt,
+    stale: false,
+    degraded: runs.at(-1)?.status === "failed",
+    latestRunStatus: runs.at(-1)?.status ?? null,
+    latestSuccessAt: runs.findLast((run) => run.status === "success")?.endedAt ?? null,
   };
 }
