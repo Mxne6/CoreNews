@@ -3,9 +3,22 @@ import { defaultPipelineStore, runDailyPipeline } from "@/lib/pipeline/run-daily
 import { hasRequiredEnv } from "@/lib/config/env";
 import { runDailySupabasePipeline } from "@/lib/pipeline/run-daily-supabase";
 
+function readCronSecretFromRequest(request: Request): string | null {
+  const authHeader = request.headers.get("authorization");
+  if (authHeader) {
+    const bearerMatch = authHeader.match(/^Bearer\s+(.+)$/i);
+    if (bearerMatch?.[1]) {
+      return bearerMatch[1].trim();
+    }
+  }
+
+  const legacyHeader = request.headers.get("x-cron-secret");
+  return legacyHeader?.trim() || null;
+}
+
 export async function GET(request: Request) {
-  const authHeader = request.headers.get("x-cron-secret");
-  if (!process.env.CRON_SECRET || authHeader !== process.env.CRON_SECRET) {
+  const providedSecret = readCronSecretFromRequest(request);
+  if (!process.env.CRON_SECRET || providedSecret !== process.env.CRON_SECRET) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 

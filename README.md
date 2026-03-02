@@ -31,7 +31,8 @@ Set these values in `.env.local` and Vercel project settings:
 ## Daily Pipeline
 
 - Cron endpoint: `GET /api/cron/daily`
-- Auth header: `x-cron-secret: <CRON_SECRET>`
+- Vercel Cron auth: `Authorization: Bearer <CRON_SECRET>`
+- Manual trigger auth (fallback): `x-cron-secret: <CRON_SECRET>`
 - Vercel schedule (UTC): `0 0 * * *` (daily)
 
 Pipeline health:
