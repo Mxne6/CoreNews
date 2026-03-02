@@ -32,6 +32,8 @@ type UpsertedEventRow = {
   article_count: number;
 };
 
+const MAX_DASHSCOPE_SUMMARIES_PER_RUN = 20;
+
 function buildFallbackSummary(articleCount: number): string {
   return `该事件在近 24-72 小时内有 ${articleCount} 条相关报道。`;
 }
@@ -141,6 +143,13 @@ async function upsertEventsAndMappings(
     summary_version: string;
   }> = [];
   const summaryByEventId = new Map<number, string>();
+  const llmEligibleEventIds = new Set<number>(
+    ((upsertedEvents ?? []) as UpsertedEventRow[])
+      .slice()
+      .sort((a, b) => Number(b.hot_score) - Number(a.hot_score))
+      .slice(0, MAX_DASHSCOPE_SUMMARIES_PER_RUN)
+      .map((item) => Number(item.id)),
+  );
 
   for (const event of upsertedEvents ?? []) {
     const eventId = Number(event.id);
@@ -152,7 +161,7 @@ async function upsertEventsAndMappings(
     let modelName = "rule-fallback";
     let modelVersion = `rule-fallback-${runId}`;
 
-    if (dashScopeClient && info) {
+    if (dashScopeClient && info && llmEligibleEventIds.has(eventId)) {
       try {
         summary = await dashScopeClient.summarizeEvent({
           title: info.canonicalTitle,

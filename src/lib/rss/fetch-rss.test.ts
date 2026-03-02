@@ -42,4 +42,22 @@ describe("fetchRss", () => {
     expect(fetchMock.mock.calls[1]?.[0]).toBe("https://example.com/feed.xml");
     expect(items).toHaveLength(1);
   });
+
+  it("follows single redirect manually", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response("", {
+          status: 302,
+          headers: { Location: "https://example.com/redirected.xml" },
+        }),
+      )
+      .mockResolvedValueOnce(new Response(sampleRss, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const items = await fetchRss("https://example.com/feed.xml");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://example.com/redirected.xml");
+    expect(items).toHaveLength(1);
+  });
 });

@@ -3,6 +3,8 @@ import { defaultPipelineStore, runDailyPipeline } from "@/lib/pipeline/run-daily
 import { hasRequiredEnv } from "@/lib/config/env";
 import { runDailySupabasePipeline } from "@/lib/pipeline/run-daily-supabase";
 
+export const maxDuration = 300;
+
 function readCronSecretFromRequest(request: Request): string | null {
   const authHeader = request.headers.get("authorization");
   if (authHeader) {

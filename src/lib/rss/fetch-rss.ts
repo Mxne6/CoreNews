@@ -20,6 +20,14 @@ function normalizeCandidateUrls(url: string): string[] {
   return [...new Set(candidates)];
 }
 
+function buildAbsoluteUrl(baseUrl: string, location: string): string {
+  try {
+    return new URL(location, baseUrl).toString();
+  } catch {
+    return location;
+  }
+}
+
 function withTimeoutSignal(ms: number): AbortSignal {
   const controller = new AbortController();
   setTimeout(() => controller.abort(), ms);
@@ -38,14 +46,32 @@ export async function fetchRss(url: string): Promise<RssFeedItem[]> {
           "User-Agent": "CoreNewsBot/1.0 (+https://core-news.vercel.app)",
           Accept: "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.1",
         },
-        redirect: "follow",
+        redirect: "manual",
         signal: withTimeoutSignal(20_000),
       });
-      if (!response.ok) {
-        throw new Error(`http_${response.status}`);
+
+      let finalResponse = response;
+      if (
+        (response.status === 301 || response.status === 302 || response.status === 307 || response.status === 308) &&
+        response.headers.get("location")
+      ) {
+        const redirectUrl = buildAbsoluteUrl(candidateUrl, response.headers.get("location") as string);
+        finalResponse = await fetch(redirectUrl, {
+          method: "GET",
+          headers: {
+            "User-Agent": "CoreNewsBot/1.0 (+https://core-news.vercel.app)",
+            Accept: "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.1",
+          },
+          redirect: "manual",
+          signal: withTimeoutSignal(20_000),
+        });
       }
 
-      const xml = await response.text();
+      if (!finalResponse.ok) {
+        throw new Error(`http_${finalResponse.status}`);
+      }
+
+      const xml = await finalResponse.text();
       const feed = await parser.parseString(xml);
       return feed.items ?? [];
     } catch (error) {
