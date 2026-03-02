@@ -66,7 +66,6 @@ export function createInMemoryPipelineStore(): PipelineStore {
 }
 
 declare global {
-  // eslint-disable-next-line no-var
   var __coreNewsPipelineStore: PipelineStore | undefined;
 }
 
