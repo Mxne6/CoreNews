@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { BrandLogo } from "@/components/brand-logo";
 import { CATEGORY_ORDER, getCategoryHref, getCategoryLabel } from "@/lib/ui/categories";
 
 const NAV_ITEMS = CATEGORY_ORDER.map((slug) => ({
@@ -22,9 +23,10 @@ export function TopNav() {
         <nav className="flex flex-wrap items-center gap-3 px-4 py-3 sm:gap-6 sm:px-6">
           <Link
             href="/"
-            className="text-lg font-semibold tracking-[0.08em] text-white transition-colors hover:text-blue-300"
+            aria-label="返回 CoreNews 首页"
+            className="group rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70"
           >
-            CoreNews
+            <BrandLogo className="transition duration-200 ease-out group-hover:brightness-110" />
           </Link>
           <div className="h-5 w-px bg-white/15" aria-hidden />
           <div className="flex flex-wrap items-center gap-1.5 text-sm sm:text-[0.95rem]">

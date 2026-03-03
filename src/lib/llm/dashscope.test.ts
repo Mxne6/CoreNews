@@ -129,3 +129,29 @@ describe("DashScopeClient.summarizeEventWithTags", () => {
     expect(result.tags).toEqual(["关税", "供应链", "政策"]);
   });
 });
+
+describe("DashScopeClient.classifyCategory", () => {
+  it("returns allowed category slug from JSON response", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ message: { content: "{\"category\":\"finance\"}" } }],
+      }),
+    }));
+    // @ts-expect-error test override
+    global.fetch = fetchMock;
+
+    const client = new DashScopeClient("test-key");
+    const category = await client.classifyCategory({
+      canonicalTitle: "Platform update rollout expands",
+      candidateCategories: ["tech", "finance", "international"],
+      articleTitles: ["Platform update rollout expands"],
+      articleCount: 1,
+      sourceCategories: ["tech"],
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(category).toBe("finance");
+  });
+});

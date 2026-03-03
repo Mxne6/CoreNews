@@ -58,22 +58,6 @@ type ReusableSummaryPayload = {
   modelVersion: string;
 };
 
-const CATEGORY_LABELS: Record<string, string> = {
-  ai: "AI",
-  tech: "科技",
-  business: "商业",
-  markets: "市场",
-  policy: "政策",
-  china: "中国",
-  us: "美国",
-  japan: "日本",
-  europe: "欧洲",
-  world: "国际",
-  international: "国际",
-  energy: "能源",
-  health: "医疗",
-};
-
 function getCategoryLabel(category: string): string {
   return getUiCategoryLabel(normalizeCategory(category));
 }
@@ -249,6 +233,7 @@ function normalizeStoredTags(raw: unknown): string[] {
 const MAX_DASHSCOPE_SUMMARIES_PER_RUN = 40;
 const MAX_DASHSCOPE_TITLE_TRANSLATIONS_PER_RUN = 40;
 const MAX_AMBIGUITY_RESOLVER_CALLS_PER_RUN = 40;
+const MAX_CATEGORY_CLASSIFIER_CALLS_PER_RUN = 100;
 const SOURCE_FAILURE_DEACTIVATE_THRESHOLD = 3;
 const INACTIVE_SOURCE_RETRY_INTERVAL_HOURS = 24;
 
@@ -636,18 +621,14 @@ async function upsertEventsAndMappings(
     id: Number(event.id),
     tags: tagsByEventId.get(Number(event.id)) ?? [],
   }));
-  if (eventTagRows.length > 0) {
-    const { error: eventTagError } = await client
-      .from("events")
-      .upsert(eventTagRows, { onConflict: "id" });
+  for (const row of eventTagRows) {
+    const { error: eventTagError } = await client.from("events").update({ tags: row.tags }).eq("id", row.id);
     if (eventTagError) {
       throw new Error(`upsert_event_tags_failed: ${eventTagError.message}`);
     }
   }
 
   const snapshotEvents: SnapshotEvent[] = ((upsertedEvents ?? []) as UpsertedEventRow[]).map((event) => {
-    const stableKey = String(event.event_stable_key);
-    const info = aggregatedByStableKey.get(stableKey);
     const normalizedCategory = normalizeCategory(String(event.category));
     return {
       id: String(event.id),
@@ -727,6 +708,8 @@ export async function runDailySupabasePipeline(options?: {
       windowDays: 3,
       ambiguityResolver: dashScopeClient,
       ambiguityLimit: MAX_AMBIGUITY_RESOLVER_CALLS_PER_RUN,
+      categoryClassifier: dashScopeClient,
+      categoryClassifierLimit: MAX_CATEGORY_CLASSIFIER_CALLS_PER_RUN,
     });
 
     const { snapshotEvents } = await upsertEventsAndMappings(client, aggregated, runId, dashScopeClient);

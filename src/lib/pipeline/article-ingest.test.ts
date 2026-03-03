@@ -137,7 +137,7 @@ describe("ingestArticlesFromSources", () => {
 
     const sourceTable = {
       cloneRequestState: { ok: true },
-      update(this: { cloneRequestState?: unknown }, _values: Record<string, unknown>) {
+      update(this: { cloneRequestState?: unknown }) {
         if (!this?.cloneRequestState) {
           throw new TypeError("Cannot read properties of undefined (reading 'cloneRequestState')");
         }

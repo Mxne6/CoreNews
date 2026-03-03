@@ -1,4 +1,5 @@
 import type { AmbiguousGroup, AmbiguityResolverClient } from "@/lib/pipeline/resolve-ambiguous";
+import { normalizeCategory, type CategorySlug } from "@/lib/ui/categories";
 
 type DashScopeMessage = {
   role: "system" | "user" | "assistant";
@@ -69,6 +70,38 @@ function sanitizeTags(raw: unknown): string[] {
     .filter((item) => item.length >= 2 && item.length <= 8)
     .filter((item) => !GENERIC_TAGS.has(item))
     .slice(0, 3);
+}
+
+function parseCategoryFromModelText(input: {
+  text: string;
+  allowedCategories: CategorySlug[];
+}): CategorySlug | null {
+  const normalizedAllowed = new Set(input.allowedCategories);
+  const tryRaw = (value: unknown): CategorySlug | null => {
+    if (typeof value !== "string") {
+      return null;
+    }
+    const raw = value.trim();
+    if (!raw) {
+      return null;
+    }
+    const normalized = normalizeCategory(raw);
+    if (normalizedAllowed.has(normalized)) {
+      return normalized;
+    }
+    return null;
+  };
+
+  try {
+    const parsed = JSON.parse(input.text) as { category?: unknown } | unknown;
+    if (parsed && typeof parsed === "object" && "category" in parsed) {
+      return tryRaw((parsed as { category?: unknown }).category);
+    }
+  } catch {
+    // Fallback to plain-text parsing.
+  }
+
+  return tryRaw(input.text);
 }
 
 export class DashScopeClient implements AmbiguityResolverClient {
@@ -205,6 +238,44 @@ export class DashScopeClient implements AmbiguityResolverClient {
     } catch {
       return [];
     }
+  }
+
+  async classifyCategory(input: {
+    canonicalTitle: string;
+    candidateCategories: CategorySlug[];
+    articleTitles: string[];
+    articleCount: number;
+    sourceCategories: CategorySlug[];
+  }): Promise<string | null> {
+    const candidates = [...new Set(input.candidateCategories.map((item) => normalizeCategory(item)))];
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    const messages: DashScopeMessage[] = [
+      {
+        role: "system",
+        content:
+          "You classify news events into one category slug. Return strict JSON only: {\"category\":\"<slug>\"}.",
+      },
+      {
+        role: "user",
+        content:
+          `Choose one category slug from: ${candidates.join(", ")}\n` +
+          `Title: ${input.canonicalTitle}\n` +
+          `Related titles: ${input.articleTitles.slice(0, 3).join(" | ")}\n` +
+          `Source priors: ${input.sourceCategories.join(", ")}\n` +
+          `Article count: ${input.articleCount}\n` +
+          "Return JSON only.",
+      },
+    ];
+
+    const text = await this.requestWithRetry(messages, 2);
+    const category = parseCategoryFromModelText({
+      text,
+      allowedCategories: candidates,
+    });
+    return category;
   }
 
   private async requestWithRetry(messages: DashScopeMessage[], maxRetries: number): Promise<string> {

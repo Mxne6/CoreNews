@@ -75,7 +75,7 @@ describe("core news schema migrations", () => {
     expect(() =>
       db.public.none(`
         insert into articles (source_id, title, normalized_title, url, lang, content_hash, dedupe_key)
-        values (2, 'B', 'b', 'https://example.com/b1', 'en', 'hash-3', 'dedupe-1');
+        values (2, 'B', 'b', 'https://example.com/a1', 'en', 'hash-3', 'dedupe-1');
       `),
     ).not.toThrow();
   });

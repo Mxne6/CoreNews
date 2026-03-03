@@ -12,6 +12,20 @@ const notoSansSc = Noto_Sans_SC({
 export const metadata: Metadata = {
   title: "CoreNews 情报终端",
   description: "多领域每日热点情报看板。",
+  icons: {
+    icon: [
+      {
+        url: "/brand/corenews-mark-a-dark.svg",
+        media: "(prefers-color-scheme: dark)",
+      },
+      {
+        url: "/brand/corenews-mark-a-light.svg",
+        media: "(prefers-color-scheme: light)",
+      },
+    ],
+    shortcut: "/brand/corenews-mark-a-dark.svg",
+    apple: "/brand/corenews-mark-a-light.svg",
+  },
 };
 
 export default function RootLayout({

@@ -38,6 +38,16 @@ export type EventArticleMapping = {
   articleIds: number[];
 };
 
+export type CategoryClassifierClient = {
+  classifyCategory: (input: {
+    canonicalTitle: string;
+    candidateCategories: CategorySlug[];
+    articleTitles: string[];
+    articleCount: number;
+    sourceCategories: CategorySlug[];
+  }) => Promise<string | null>;
+};
+
 type AggregateInput = {
   articles: AggregationArticle[];
   sources: AggregationSource[];
@@ -45,6 +55,8 @@ type AggregateInput = {
   windowDays: number;
   ambiguityResolver?: AmbiguityResolverClient | null;
   ambiguityLimit?: number;
+  categoryClassifier?: CategoryClassifierClient | null;
+  categoryClassifierLimit?: number;
 };
 
 type EventBundle = {
@@ -195,18 +207,6 @@ function resolvePublishedAt(article: AggregationArticle): Date {
   return new Date(article.publishedAt ?? article.publishedAtFallback);
 }
 
-function pickCategory(
-  articles: AggregationArticle[],
-  sourceById: Map<number, AggregationSource>,
-): string {
-  const categoryCounts = new Map<string, number>();
-  for (const article of articles) {
-    const category = sourceById.get(article.sourceId)?.category ?? "other";
-    categoryCounts.set(category, (categoryCounts.get(category) ?? 0) + 1);
-  }
-  return [...categoryCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "other";
-}
-
 function normalizeForKeyword(text: string): string {
   return ` ${text.toLowerCase()} `;
 }
@@ -264,42 +264,59 @@ function resolveSourcePriorCategory(sourceCategory?: string): CategorySlug {
   return SOURCE_CATEGORY_PRIOR[key] ?? normalizeCategory(sourceCategory);
 }
 
+function isCategorySlug(value: string): value is CategorySlug {
+  return FLAT_CATEGORY_ORDER.includes(value as CategorySlug);
+}
+
 function pickCategories(
   input: {
     canonicalTitle: string;
     articles: AggregationArticle[];
   },
   sourceById: Map<number, AggregationSource>,
-): CategorySlug[] {
+): {
+  primary: CategorySlug;
+  ranked: Array<[CategorySlug, number]>;
+  lowConfidence: boolean;
+  sourceCategories: CategorySlug[];
+} {
   const scoreByCategory = new Map<CategorySlug, number>(
     FLAT_CATEGORY_ORDER.map((item) => [item, 0]),
   );
   const sourceSets = new Map<CategorySlug, Set<number>>();
   const articleCountByCategory = new Map<CategorySlug, number>();
+  const sourceCategories = new Set<CategorySlug>();
 
   for (const article of input.articles) {
     const source = sourceById.get(article.sourceId);
     const category = resolveSourcePriorCategory(source?.category);
     const authority = source?.authorityWeight ?? 1;
+    sourceCategories.add(category);
 
     if (!sourceSets.has(category)) {
       sourceSets.set(category, new Set<number>());
     }
     sourceSets.get(category)?.add(article.sourceId);
     articleCountByCategory.set(category, (articleCountByCategory.get(category) ?? 0) + 1);
-    scoreByCategory.set(category, (scoreByCategory.get(category) ?? 0) + authority * 1.2);
+    // Source category is only a weak prior.
+    scoreByCategory.set(category, (scoreByCategory.get(category) ?? 0) + authority * 0.18);
   }
 
   for (const [category, set] of sourceSets.entries()) {
-    scoreByCategory.set(category, (scoreByCategory.get(category) ?? 0) + set.size * 2);
+    scoreByCategory.set(category, (scoreByCategory.get(category) ?? 0) + set.size * 0.25);
   }
   for (const [category, count] of articleCountByCategory.entries()) {
-    scoreByCategory.set(category, (scoreByCategory.get(category) ?? 0) + Math.log1p(count));
+    scoreByCategory.set(category, (scoreByCategory.get(category) ?? 0) + Math.log1p(count) * 0.12);
   }
 
-  const keywordBonus = detectTitleCategoryBonus(input.canonicalTitle);
+  const semanticText = [
+    input.canonicalTitle,
+    ...input.articles.map((article) => article.title),
+    ...input.articles.map((article) => article.normalizedTitle),
+  ].join(" ");
+  const keywordBonus = detectTitleCategoryBonus(semanticText);
   for (const [category, bonus] of keywordBonus.entries()) {
-    scoreByCategory.set(category, (scoreByCategory.get(category) ?? 0) + bonus * 1.35);
+    scoreByCategory.set(category, (scoreByCategory.get(category) ?? 0) + bonus * 2.3);
   }
 
   const ranked = [...scoreByCategory.entries()].sort((a, b) => {
@@ -311,9 +328,22 @@ function pickCategories(
 
   const primary = ranked[0]?.[0];
   if (!primary) {
-    return ["international"];
+    return {
+      primary: "international",
+      ranked: [["international", 0]],
+      lowConfidence: true,
+      sourceCategories: [...sourceCategories.values()],
+    };
   }
-  return [primary];
+  const topScore = ranked[0]?.[1] ?? 0;
+  const secondScore = ranked[1]?.[1] ?? 0;
+  const lowConfidence = topScore < 1.2 || topScore - secondScore < 0.75;
+  return {
+    primary,
+    ranked,
+    lowConfidence,
+    sourceCategories: [...sourceCategories.values()],
+  };
 }
 
 function resolveArticleCategory(
@@ -463,16 +493,43 @@ export async function aggregateEventsRolling(input: AggregateInput): Promise<{
 
   const events: AggregatedEvent[] = [];
   const eventMappings: EventArticleMapping[] = [];
+  let categoryClassifierCalls = 0;
+  const categoryClassifierLimit = Math.max(
+    0,
+    Math.min(input.categoryClassifierLimit ?? bundles.length, bundles.length),
+  );
 
   for (const bundle of bundles) {
-    const categories = pickCategories(
+    const decision = pickCategories(
       {
         canonicalTitle: bundle.canonicalTitle,
         articles: bundle.articles,
       },
       sourceById,
     );
-    const category = categories[0] ?? "international";
+    let category = decision.primary;
+    if (
+      input.categoryClassifier &&
+      decision.lowConfidence &&
+      categoryClassifierCalls < categoryClassifierLimit
+    ) {
+      categoryClassifierCalls += 1;
+      try {
+        const resolved = await input.categoryClassifier.classifyCategory({
+          canonicalTitle: bundle.canonicalTitle,
+          candidateCategories: decision.ranked.slice(0, 3).map(([item]) => item),
+          articleTitles: bundle.articles.map((article) => article.title),
+          articleCount: bundle.articles.length,
+          sourceCategories: decision.sourceCategories,
+        });
+        const raw = resolved?.trim().toLowerCase() ?? "";
+        if (raw && (isCategorySlug(raw) || raw in SOURCE_CATEGORY_PRIOR)) {
+          category = normalizeCategory(raw);
+        }
+      } catch {
+        // Keep rule-based category on classifier failures.
+      }
+    }
     const authorityWeightSum = bundle.articles.reduce(
       (sum, article) => sum + (sourceById.get(article.sourceId)?.authorityWeight ?? 1),
       0,

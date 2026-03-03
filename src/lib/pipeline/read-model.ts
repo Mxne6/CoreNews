@@ -91,6 +91,14 @@ type ReadModelCacheStore = {
 
 const READ_CACHE_TTL_MS = 30_000;
 const RUN_ID_CACHE_TTL_MS = 10_000;
+const DEFAULT_READ_MODEL_LOADER_TIMEOUT_MS = 5_000;
+const READ_MODEL_LOADER_TIMEOUT_MS = (() => {
+  const raw = Number(process.env.READ_MODEL_LOADER_TIMEOUT_MS ?? DEFAULT_READ_MODEL_LOADER_TIMEOUT_MS);
+  if (!Number.isFinite(raw)) {
+    return DEFAULT_READ_MODEL_LOADER_TIMEOUT_MS;
+  }
+  return Math.min(20_000, Math.max(1_000, Math.trunc(raw)));
+})();
 
 declare global {
   var __coreNewsReadModelCacheStore: ReadModelCacheStore | undefined;
@@ -122,7 +130,7 @@ async function readThroughCache<T>(
     return (await existingInFlight) as T;
   }
 
-  const promise = loader()
+  const promise = withTimeout(loader(), READ_MODEL_LOADER_TIMEOUT_MS, key)
     .then((value) => {
       store.values.set(key, {
         value,
@@ -138,6 +146,23 @@ async function readThroughCache<T>(
 
   store.inFlight.set(key, promise);
   return (await promise) as T;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`read_model_timeout:${label}`));
+    }, timeoutMs);
+    promise
+      .then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+  });
 }
 
 export function invalidateReadModelCache() {

@@ -211,4 +211,40 @@ describe("aggregateEventsRolling", () => {
     expect(result.events).toHaveLength(1);
     expect(result.events[0].category).toBe("current-affairs");
   });
+
+  it("uses category classifier fallback when semantic confidence is low", async () => {
+    const classifierCalls: Array<{ title: string; candidates: string[] }> = [];
+    const lowConfidenceArticles: AggregationArticle[] = [
+      {
+        id: 301,
+        sourceId: 1,
+        title: "Platform update rollout expands",
+        normalizedTitle: "platform update rollout expands",
+        publishedAt: "2026-03-02T07:20:00.000Z",
+        publishedAtFallback: "2026-03-02T07:20:00.000Z",
+      },
+    ];
+
+    const result = await aggregateEventsRolling({
+      articles: lowConfidenceArticles,
+      sources,
+      now,
+      windowDays: 3,
+      categoryClassifier: {
+        classifyCategory: async (input) => {
+          classifierCalls.push({
+            title: input.canonicalTitle,
+            candidates: input.candidateCategories,
+          });
+          return "finance";
+        },
+      },
+      categoryClassifierLimit: 1,
+    });
+
+    expect(classifierCalls).toHaveLength(1);
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0].category).toBe("finance");
+  });
+
 });

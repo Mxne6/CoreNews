@@ -1,80 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { loadNewsDetailFromClient } from "@/lib/pipeline/read-model";
 
-type QueryResult<T> = Promise<{ data: T; error: { message: string } | null }>;
-
-function createClientForParallelQueryTest(input: {
-  summaryPromise: QueryResult<Array<{ summary_cn: string; generated_at: string }>>;
-  onEventArticlesQuery: () => void;
-}) {
-  return {
-    from: (table: string) => {
-      if (table === "events") {
-        return {
-          select: () => ({
-            eq: () => ({
-              maybeSingle: async () => ({
-                data: {
-                  id: 1,
-                  canonical_title: "Test Event",
-                  category: "tech",
-                  hot_score: 80,
-                },
-                error: null,
-              }),
-            }),
-          }),
-        };
-      }
-
-      if (table === "summaries") {
-        return {
-          select: () => ({
-            eq: () => ({
-              order: () => ({
-                limit: () => input.summaryPromise,
-              }),
-            }),
-          }),
-        };
-      }
-
-      if (table === "event_articles") {
-        return {
-          select: () => ({
-            eq: async () => {
-              input.onEventArticlesQuery();
-              return { data: [], error: null };
-            },
-          }),
-        };
-      }
-
-      if (table === "articles") {
-        return {
-          select: () => ({
-            in: async () => ({ data: [], error: null }),
-          }),
-        };
-      }
-
-      if (table === "sources") {
-        return {
-          select: () => ({
-            in: async () => ({ data: [], error: null }),
-          }),
-        };
-      }
-
-      throw new Error(`unexpected_table_${table}`);
-    },
-  };
-}
-
-function createClientForSourceJoinTest(input: {
-  onArticleSelectColumns: (columns: string) => void;
-  onSourcesTableQuery: () => void;
-}) {
+function createClientForDetailBehaviorTest() {
   return {
     from: (table: string) => {
       if (table === "events") {
@@ -87,6 +14,7 @@ function createClientForSourceJoinTest(input: {
                   canonical_title: "Join Event",
                   category: "world",
                   hot_score: 72,
+                  tags: ["GLOBAL", "SUMMIT"],
                 },
                 error: null,
               }),
@@ -114,7 +42,7 @@ function createClientForSourceJoinTest(input: {
         return {
           select: () => ({
             eq: async () => ({
-              data: [{ article_id: 2001 }],
+              data: [{ article_id: 2001 }, { article_id: 2002 }],
               error: null,
             }),
           }),
@@ -123,36 +51,36 @@ function createClientForSourceJoinTest(input: {
 
       if (table === "articles") {
         return {
-          select: (columns: string) => {
-            input.onArticleSelectColumns(columns);
-            return {
-              in: async () => ({
-                data: [
-                  {
-                    id: 2001,
-                    source_id: 77,
-                    url: "https://example.com/a2001",
-                    title: "Article 2001",
-                    published_at: "2026-03-03T00:00:00.000Z",
-                    sources: {
-                      id: 77,
-                      name: "Joined Source",
-                      authority_weight: 1.23,
-                    },
-                  },
-                ],
-                error: null,
-              }),
-            };
-          },
-        };
-      }
-
-      if (table === "sources") {
-        input.onSourcesTableQuery();
-        return {
           select: () => ({
-            in: async () => ({ data: [], error: null }),
+            in: async () => ({
+              data: [
+                {
+                  id: 2001,
+                  source_id: 77,
+                  url: "https://example.com/a2001",
+                  title: "Article 2001",
+                  published_at: "2026-03-03T00:00:00.000Z",
+                  sources: {
+                    id: 77,
+                    name: "Joined Source B",
+                    authority_weight: 1.1,
+                  },
+                },
+                {
+                  id: 2002,
+                  source_id: 78,
+                  url: "https://example.com/a2002",
+                  title: "Article 2002",
+                  published_at: "2026-03-03T01:00:00.000Z",
+                  sources: {
+                    id: 78,
+                    name: "Joined Source A",
+                    authority_weight: 1.3,
+                  },
+                },
+              ],
+              error: null,
+            }),
           }),
         };
       }
@@ -163,62 +91,26 @@ function createClientForSourceJoinTest(input: {
 }
 
 describe("loadNewsDetailFromClient", () => {
-  it("queries summaries and event mappings in parallel after event row is loaded", async () => {
-    let eventArticlesQueried = false;
-    const deferredSummary: {
-      resolve: (value: { data: Array<{ summary_cn: string; generated_at: string }>; error: null }) => void;
-    } = {
-      resolve: () => undefined,
-    };
-    const summaryPromise: QueryResult<Array<{ summary_cn: string; generated_at: string }>> = new Promise(
-      (resolve) => {
-        deferredSummary.resolve = resolve;
-      },
-    );
-
-    const client = createClientForParallelQueryTest({
-      summaryPromise,
-      onEventArticlesQuery: () => {
-        eventArticlesQueried = true;
-      },
-    });
-
-    const pending = loadNewsDetailFromClient(client as never, "1");
-    await Promise.resolve();
-
-    expect(eventArticlesQueried).toBe(true);
-
-    deferredSummary.resolve({
-      data: [{ summary_cn: "summary text", generated_at: "2026-03-03T00:00:00.000Z" }],
-      error: null,
-    });
-
-    const detail = await pending;
-    expect(detail?.summaryCn).toBe("summary text");
-    expect(detail?.sources).toEqual([]);
-  });
-
-  it("loads source metadata via article join without querying sources table", async () => {
-    let articleSelectColumns = "";
-    let sourcesTableQueried = false;
-
-    const client = createClientForSourceJoinTest({
-      onArticleSelectColumns: (columns) => {
-        articleSelectColumns = columns;
-      },
-      onSourcesTableQuery: () => {
-        sourcesTableQueried = true;
-      },
-    });
-
+  it("maps detail payload from event, summary, and joined article source rows", async () => {
+    const client = createClientForDetailBehaviorTest();
     const detail = await loadNewsDetailFromClient(client as never, "2");
 
-    expect(articleSelectColumns).toContain("sources(");
-    expect(sourcesTableQueried).toBe(false);
+    expect(detail).not.toBeNull();
+    expect(detail?.id).toBe("2");
+    expect(detail?.title).toBe("Join Event");
+    expect(detail?.category).toBe("international");
+    expect(detail?.summaryCn).toBe("joined summary");
+    expect(detail?.tags).toEqual(["GLOBAL", "SUMMIT"]);
+    expect(detail?.sources).toHaveLength(2);
     expect(detail?.sources[0]).toMatchObject({
+      sourceId: 78,
+      sourceName: "Joined Source A",
+      authorityWeight: 1.3,
+    });
+    expect(detail?.sources[1]).toMatchObject({
       sourceId: 77,
-      sourceName: "Joined Source",
-      authorityWeight: 1.23,
+      sourceName: "Joined Source B",
+      authorityWeight: 1.1,
     });
   });
 });
