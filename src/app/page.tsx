@@ -7,15 +7,18 @@ export const revalidate = 120;
 type HomeEvent = {
   id: string;
   category: string;
+  categories?: string[];
+  tags?: string[];
   canonicalTitle: string;
   summaryCn?: string;
   hotScore?: number;
+  lastPublishedAt?: string;
 };
 
 const FALLBACK_EVENTS: HomeEvent[] = [
   {
-    id: "ai-openai-releases-gpt-5",
-    category: "ai",
+    id: "tech-openai-releases-gpt-5",
+    category: "tech",
     canonicalTitle: "OpenAI 发布 GPT-5 模型",
     summaryCn: "用于初始启动的演示兜底事件。",
     hotScore: 88.2,
@@ -56,6 +59,9 @@ export default async function HomePage() {
                 summaryCn={event.summaryCn}
                 hotScore={event.hotScore}
                 meta={getCategoryLabel(event.category)}
+                categories={event.categories}
+                tags={event.tags}
+                updatedAt={event.lastPublishedAt}
               />
             ))}
           </div>

@@ -13,7 +13,8 @@ beforeEach(() => {
   readNewsDetailMock.mockResolvedValue({
     id: "1",
     title: "OpenAI 发布 GPT-5 模型",
-    category: "ai",
+    category: "tech",
+    tags: ["MODEL"],
     hotScore: 88,
     summaryCn: "摘要内容",
     sources: [
@@ -37,6 +38,9 @@ describe("NewsDetailPage", () => {
     render(ui);
 
     expect(screen.getByText("路透社")).toBeInTheDocument();
+    expect(screen.getByText("#MODEL")).toBeInTheDocument();
+    expect(screen.getByText(/热度\s*88\.0/)).toBeInTheDocument();
+    expect(screen.getByText(/来源\s*1\s*条/)).toBeInTheDocument();
     const link = screen.getByRole("link", { name: "查看原始报道 1" });
     expect(link).toHaveAttribute("href", "https://example.com/a1");
     expect(link).toHaveAttribute("target", "_blank");

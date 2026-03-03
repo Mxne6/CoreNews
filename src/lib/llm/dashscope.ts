@@ -10,6 +10,17 @@ type DashScopeResponse = {
   choices?: Array<{ message?: { content?: string } }>;
 };
 
+const GENERIC_TAGS = new Set([
+  "\u70ed\u70b9",
+  "\u7126\u70b9",
+  "\u8fdb\u5c55",
+  "\u5f71\u54cd",
+  "\u66f4\u65b0",
+  "\u5173\u6ce8",
+  "\u52a8\u6001",
+  "\u65b0\u95fb",
+]);
+
 export function extractDashScopeText(payload: DashScopeResponse): string {
   const directText = (payload.output as { text?: string } | undefined)?.text;
   if (typeof directText === "string" && directText.trim().length > 0) {
@@ -38,7 +49,7 @@ function sleep(ms: number) {
 }
 
 function normalizeModelText(text: string): string {
-  return text.trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g, "").trim();
+  return text.trim().replace(/^["']+|["']+$/g, "").trim();
 }
 
 function buildDetailedFallbackSummary(input: {
@@ -46,10 +57,18 @@ function buildDetailedFallbackSummary(input: {
   category: string;
   articleCount: number;
 }): string {
-  return (
-    `${input.title} 在 ${input.category} 领域持续发酵，当前已汇聚 ${input.articleCount} 条跨来源报道。` +
-    "现阶段焦点集中在关键进展与潜在影响，后续可重点关注监管口径、产业连锁反应以及官方披露更新。"
-  );
+  return `${input.title} 在 ${input.category} 领域持续发酵，当前已汇聚 ${input.articleCount} 条跨来源报道。当前焦点集中在关键进展与潜在影响，后续可重点关注监管口径、产业链反应以及官方披露更新。`;
+}
+
+function sanitizeTags(raw: unknown): string[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item) => item.length >= 2 && item.length <= 8)
+    .filter((item) => !GENERIC_TAGS.has(item))
+    .slice(0, 3);
 }
 
 export class DashScopeClient implements AmbiguityResolverClient {
@@ -92,29 +111,49 @@ export class DashScopeClient implements AmbiguityResolverClient {
     category: string;
     articleCount: number;
   }): Promise<string> {
+    const result = await this.summarizeEventWithTags(input);
+    return result.summary;
+  }
+
+  async summarizeEventWithTags(input: {
+    title: string;
+    category: string;
+    articleCount: number;
+  }): Promise<{ summary: string; tags: string[] }> {
     const messages: DashScopeMessage[] = [
       {
         role: "system",
         content:
-          "You are a Chinese news editor. Return one informative paragraph in Chinese with concrete details.",
+          "You are a Chinese news editor. Return strict JSON: {\"summary\":\"...\",\"tags\":[\"...\",\"...\"]}.",
       },
       {
         role: "user",
         content:
-          "请用中文写 1 段热点摘要，长度 90-140 字。" +
-          "必须包含：当前进展、潜在影响或风险、后续观察点。" +
-          "不要只改写标题，不要使用“据报道”等空话。\n" +
-          `标题: ${input.title}\n` +
-          `分类: ${input.category}\n` +
-          `报道数量: ${input.articleCount}`,
+          "Output JSON object with fields summary and tags.\n" +
+          "summary: one paragraph in Chinese, 90-140 chars, must include development, impact/risk, and next watchpoint.\n" +
+          "tags: 2-3 Chinese tags, each 2-8 chars, specific nouns only.\n" +
+          "No markdown, JSON only.\n" +
+          `Title: ${input.title}\n` +
+          `Category: ${input.category}\n` +
+          `Article Count: ${input.articleCount}`,
       },
     ];
 
-    const summary = await this.requestWithRetry(messages, 3);
-    if (summary.length >= 45) {
-      return summary;
+    const text = await this.requestWithRetry(messages, 3);
+    try {
+      const parsed = JSON.parse(text) as { summary?: unknown; tags?: unknown };
+      const summaryText = typeof parsed.summary === "string" ? parsed.summary.trim() : "";
+      const summary = summaryText.length >= 45 ? summaryText : buildDetailedFallbackSummary(input);
+      return {
+        summary,
+        tags: sanitizeTags(parsed.tags),
+      };
+    } catch {
+      return {
+        summary: buildDetailedFallbackSummary(input),
+        tags: [],
+      };
     }
-    return buildDetailedFallbackSummary(input);
   }
 
   async translateTitleToChinese(input: { title: string; category: string }): Promise<string> {
@@ -127,13 +166,45 @@ export class DashScopeClient implements AmbiguityResolverClient {
       {
         role: "user",
         content:
-          "请将下面新闻标题翻译为简体中文，保持信息准确，不要添加新信息，只输出标题本身。\n" +
-          `分类: ${input.category}\n` +
-          `标题: ${input.title}`,
+          "Translate this headline into concise Simplified Chinese. Keep factual meaning unchanged and output title only.\n" +
+          `Category: ${input.category}\n` +
+          `Headline: ${input.title}`,
       },
     ];
 
     return this.requestWithRetry(messages, 3);
+  }
+
+  async extractTopicTags(input: {
+    title: string;
+    category: string;
+    summary: string;
+  }): Promise<string[]> {
+    const messages: DashScopeMessage[] = [
+      {
+        role: "system",
+        content:
+          "You extract Chinese news topic tags. Return strict JSON array with 2-3 short Chinese tags only.",
+      },
+      {
+        role: "user",
+        content:
+          "Extract 2-3 Chinese topic tags from title and summary.\n" +
+          "Tags must be specific nouns/phrases (2-8 chars), no duplicates.\n" +
+          "Do not output generic tags like hot topic/update/focus.\n" +
+          "Return strict JSON array only.\n" +
+          `Category: ${input.category}\n` +
+          `Title: ${input.title}\n` +
+          `Summary: ${input.summary}`,
+      },
+    ];
+
+    const text = await this.requestWithRetry(messages, 3);
+    try {
+      return sanitizeTags(JSON.parse(text) as unknown);
+    } catch {
+      return [];
+    }
   }
 
   private async requestWithRetry(messages: DashScopeMessage[], maxRetries: number): Promise<string> {

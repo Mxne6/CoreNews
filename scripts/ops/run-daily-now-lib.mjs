@@ -93,19 +93,29 @@ export function loadDotEnvLocal(cwd = process.cwd()) {
 }
 
 async function fetchJsonOrText(url, init = {}) {
-  const response = await fetch(url, init);
-  const raw = await response.text();
-  let body = raw;
   try {
-    body = JSON.parse(raw);
-  } catch {
-    // Keep raw text body.
+    const response = await fetch(url, init);
+    const raw = await response.text();
+    let body = raw;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      // Keep raw text body.
+    }
+    return {
+      ok: response.ok,
+      status: response.status,
+      body,
+      networkError: null,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      body: "",
+      networkError: (error).message,
+    };
   }
-  return {
-    ok: response.ok,
-    status: response.status,
-    body,
-  };
 }
 
 export async function runDailyNow(options = {}) {

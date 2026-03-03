@@ -32,6 +32,9 @@ async function main() {
 
   console.log(`[run:daily] target=${result.baseUrl}`);
   console.log(`[run:daily] trigger status=${result.trigger.status}`);
+  if (result.trigger.networkError) {
+    console.log(`[run:daily] trigger networkError=${result.trigger.networkError}`);
+  }
   console.log(`[run:daily] trigger body=${stringify(result.trigger.body)}`);
 
   if (result.health.ok) {

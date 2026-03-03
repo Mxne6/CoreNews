@@ -15,19 +15,19 @@ export async function GET() {
     normalizedTitle: "openai 发布 gpt 5 模型",
     contentHash: "h1",
     publishedAt: new Date("2026-03-02T00:00:00.000Z"),
-    category: "ai",
+    category: "tech",
   });
 
   defaultPipelineStore.events.push({
-    id: "ai-openai-releases-gpt-5",
-    category: "ai",
+    id: "tech-openai-releases-gpt-5",
+    category: "tech",
     canonicalTitle: "OpenAI 发布 GPT-5 模型",
     hotScore: 88.2,
     articleIds: ["a1"],
   });
 
   defaultPipelineStore.summaries.push({
-    eventId: "ai-openai-releases-gpt-5",
+    eventId: "tech-openai-releases-gpt-5",
     summaryCn: "多家媒体持续跟进 OpenAI 发布 GPT-5 模型这一事件。",
     modelName: "qwen-max",
     modelVersion: "seed",
@@ -37,18 +37,20 @@ export async function GET() {
     generatedAt: new Date("2026-03-02T00:00:00.000Z"),
     homePayload: [
       {
-        id: "ai-openai-releases-gpt-5",
-        category: "ai",
+        id: "tech-openai-releases-gpt-5",
+        category: "tech",
+        tags: ["AI", "大模型"],
         canonicalTitle: "OpenAI 发布 GPT-5 模型",
         hotScore: 88.2,
         summaryCn: "多家媒体持续跟进 OpenAI 发布 GPT-5 模型这一事件。",
       },
     ],
     categoryPayloads: {
-      ai: [
+      tech: [
         {
-          id: "ai-openai-releases-gpt-5",
-          category: "ai",
+          id: "tech-openai-releases-gpt-5",
+          category: "tech",
+          tags: ["AI", "大模型"],
           canonicalTitle: "OpenAI 发布 GPT-5 模型",
           hotScore: 88.2,
           summaryCn: "多家媒体持续跟进 OpenAI 发布 GPT-5 模型这一事件。",

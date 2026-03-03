@@ -1,6 +1,7 @@
 ﻿import { hasRequiredEnv } from "@/lib/config/env";
 import { getSupabaseAdminClient } from "@/lib/db/supabase-admin";
 import { defaultPipelineStore } from "@/lib/pipeline/run-daily";
+import { normalizeCategory } from "@/lib/ui/categories";
 
 type RunRow = {
   id: number;
@@ -24,6 +25,7 @@ type ArticleSourceRow = {
   url: string;
   title: string;
   published_at: string | null;
+  sources?: SourceWeightRow | SourceWeightRow[] | null;
 };
 
 type SourceWeightRow = {
@@ -41,13 +43,41 @@ type DetailSourceItem = {
   authorityWeight: number;
 };
 
+type NewsDetailPayload = {
+  id: string;
+  title: string;
+  category: string;
+  hotScore: number;
+  summaryCn: string;
+  tags: string[];
+  sources: DetailSourceItem[];
+};
+
 type HomeEventPayload = {
   id: string;
   category: string;
+  categories?: string[];
+  tags?: string[];
   canonicalTitle: string;
   hotScore?: number;
   summaryCn?: string;
+  lastPublishedAt?: string;
 };
+
+const LEGACY_CATEGORY_KEYS_BY_FLAT: Record<string, string[]> = {
+  domestic: ["china"],
+  international: ["world", "us", "japan", "europe"],
+  "current-affairs": ["policy"],
+  society: [],
+  finance: ["business", "markets", "energy"],
+  tech: ["ai"],
+  sports: [],
+  entertainment: [],
+  "culture-education": [],
+  lifestyle: ["health"],
+};
+
+type ReadModelClient = ReturnType<typeof getSupabaseAdminClient>;
 
 type ReadCacheValue = {
   expiresAt: number;
@@ -117,23 +147,122 @@ export function invalidateReadModelCache() {
 }
 
 function normalizeHomePayload(raw: unknown): HomeEventPayload[] {
+  const normalizeEvent = (
+    event: unknown,
+    fallbackCategory?: string,
+  ): HomeEventPayload | null => {
+    if (!event || typeof event !== "object") {
+      return null;
+    }
+    const row = event as Record<string, unknown>;
+    const category = normalizeCategory(String(row.category ?? fallbackCategory ?? "international"));
+
+    const hotScore =
+      typeof row.hotScore === "number"
+        ? row.hotScore
+        : Number.isFinite(Number(row.hotScore))
+          ? Number(row.hotScore)
+          : undefined;
+
+    return {
+      id: String(row.id ?? ""),
+      category,
+      categories: [category],
+      tags: normalizeTags(row.tags),
+      canonicalTitle: String(row.canonicalTitle ?? ""),
+      hotScore,
+      summaryCn: typeof row.summaryCn === "string" ? row.summaryCn : undefined,
+      lastPublishedAt: typeof row.lastPublishedAt === "string" ? row.lastPublishedAt : undefined,
+    };
+  };
+
+  const normalized: HomeEventPayload[] = [];
   if (Array.isArray(raw)) {
-    return raw as HomeEventPayload[];
+    for (const item of raw) {
+      const next = normalizeEvent(item);
+      if (next?.id) {
+        normalized.push(next);
+      }
+    }
+  } else if (raw && typeof raw === "object") {
+    const legacy = raw as Record<string, unknown[]>;
+    for (const [category, events] of Object.entries(legacy)) {
+      for (const item of events ?? []) {
+        const next = normalizeEvent(item, category);
+        if (next?.id) {
+          normalized.push(next);
+        }
+      }
+    }
   }
 
-  if (!raw || typeof raw !== "object") {
+  return normalized.sort((a, b) => Number(b.hotScore ?? 0) - Number(a.hotScore ?? 0));
+}
+
+function normalizeTags(raw: unknown): string[] {
+  if (!Array.isArray(raw)) {
     return [];
   }
+  return [...new Set(raw.map((item) => String(item).trim()).filter(Boolean))];
+}
 
-  const legacy = raw as Record<string, unknown[]>;
-  const merged = Object.entries(legacy).flatMap(([category, events]) =>
-    (events ?? []).map((event) => ({
-      category,
-      ...(event as Record<string, unknown>),
-    })),
-  ) as HomeEventPayload[];
+function extractTagsFromSnapshotPayload(payload: unknown, eventId: string): string[] {
+  if (!Array.isArray(payload)) {
+    return [];
+  }
+  const matched = payload.find((item) => {
+    if (!item || typeof item !== "object") {
+      return false;
+    }
+    return String((item as { id?: unknown }).id ?? "") === eventId;
+  }) as { tags?: unknown } | undefined;
+  return normalizeTags(matched?.tags);
+}
 
-  return merged.sort((a, b) => Number(b.hotScore ?? 0) - Number(a.hotScore ?? 0));
+async function resolveEventTags(input: { eventId: string; category: string }): Promise<string[]> {
+  const category = normalizeCategory(input.category);
+  const aliases = LEGACY_CATEGORY_KEYS_BY_FLAT[category] ?? [];
+  if (hasRequiredEnv()) {
+    try {
+      for (const key of [category, ...aliases]) {
+        const categorySnapshot = await getSnapshotPayloadForKey(`category:${key}`);
+        const fromCategory = extractTagsFromSnapshotPayload(categorySnapshot?.payload_json, input.eventId);
+        if (fromCategory.length > 0) {
+          return fromCategory;
+        }
+      }
+
+      const homeSnapshot = await getSnapshotPayloadForKey("home");
+      const fromHome = extractTagsFromSnapshotPayload(homeSnapshot?.payload_json, input.eventId);
+      if (fromHome.length > 0) {
+        return fromHome;
+      }
+    } catch {
+      // Ignore snapshot lookup errors and fallback to in-memory state.
+    }
+  }
+
+  const latest = defaultPipelineStore.snapshots.at(-1);
+  const categoryPayloads = (latest?.categoryPayloads as Record<string, unknown[]>) ?? {};
+  for (const key of [category, ...aliases]) {
+    const fromCategoryPayload = extractTagsFromSnapshotPayload(
+      categoryPayloads[key] ?? [],
+      input.eventId,
+    );
+    if (fromCategoryPayload.length > 0) {
+      return fromCategoryPayload;
+    }
+  }
+
+  const fromHomePayload = extractTagsFromSnapshotPayload(latest?.homePayload, input.eventId);
+  if (fromHomePayload.length > 0) {
+    return fromHomePayload;
+  }
+
+  const event = defaultPipelineStore.events.find((item) => item.id === input.eventId) as
+    | { categories?: string[] }
+    | undefined;
+  return normalizeTags(event?.categories);
 }
 
 async function getLatestSuccessfulRunId() {
@@ -203,28 +332,137 @@ export async function readHomeSnapshot() {
 }
 
 export async function readCategorySnapshot(slug: string, page: number, pageSize: number) {
-  let events: unknown[] = [];
+  const normalizedSlug = normalizeCategory(slug);
+  const aliases = LEGACY_CATEGORY_KEYS_BY_FLAT[normalizedSlug] ?? [];
+  let events: HomeEventPayload[] = [];
+
   if (hasRequiredEnv()) {
     try {
-      const snapshot = await getSnapshotPayloadForKey(`category:${slug}`);
-      events = (snapshot?.payload_json as unknown[]) ?? [];
+      for (const key of [normalizedSlug, ...aliases]) {
+        const snapshot = await getSnapshotPayloadForKey(`category:${key}`);
+        const payload = normalizeHomePayload(snapshot?.payload_json).filter(
+          (item) => item.category === normalizedSlug,
+        );
+        if (payload.length > 0) {
+          events = payload;
+          break;
+        }
+      }
     } catch {
       // Fallback to in-memory snapshot for local/dev resilience.
     }
   }
+
   if (events.length === 0) {
     const latest = defaultPipelineStore.snapshots.at(-1);
-    events = ((latest?.categoryPayloads as Record<string, unknown[]>) ?? {})[slug] ?? [];
+    const categoryPayloads = (latest?.categoryPayloads as Record<string, unknown[]>) ?? {};
+    const merged = new Map<string, HomeEventPayload>();
+    for (const key of [normalizedSlug, ...aliases]) {
+      const payload = normalizeHomePayload(categoryPayloads[key] ?? []).filter(
+        (item) => item.category === normalizedSlug,
+      );
+      for (const item of payload) {
+        if (!merged.has(item.id)) {
+          merged.set(item.id, item);
+        }
+      }
+    }
+    events = [...merged.values()].sort((a, b) => Number(b.hotScore ?? 0) - Number(a.hotScore ?? 0));
   }
 
   const start = (page - 1) * pageSize;
   return {
-    category: slug,
+    category: normalizedSlug,
     page,
     pageSize,
     total: events.length,
     events: events.slice(start, start + pageSize),
   };
+}
+
+export async function loadNewsDetailFromClient(client: ReadModelClient, eventId: string) {
+  const { data: event, error: eventError } = await client
+    .from("events")
+    .select("id,canonical_title,category,hot_score,tags")
+    .eq("id", Number(eventId))
+    .maybeSingle();
+  if (eventError) {
+    throw new Error(`load_event_failed: ${eventError.message}`);
+  }
+  if (!event) {
+    return null;
+  }
+
+  const [summaryResult, mappingResult] = await Promise.all([
+    client
+      .from("summaries")
+      .select("summary_cn,generated_at")
+      .eq("event_id", event.id)
+      .order("generated_at", { ascending: false })
+      .limit(1),
+    client.from("event_articles").select("article_id").eq("event_id", event.id),
+  ]);
+
+  const { data: summaries, error: summaryError } = summaryResult;
+  if (summaryError) {
+    throw new Error(`load_summary_failed: ${summaryError.message}`);
+  }
+
+  const { data: mappings, error: mappingError } = mappingResult;
+  if (mappingError) {
+    throw new Error(`load_event_articles_failed: ${mappingError.message}`);
+  }
+
+  const articleIds = ((mappings ?? []) as EventArticleMappingRow[]).map((item) => item.article_id);
+  let sources: Array<{
+    sourceId: number;
+    sourceName: string;
+    url: string;
+    title: string;
+    publishedAt: string | null;
+    authorityWeight: number;
+  }> = [];
+  if (articleIds.length > 0) {
+    const { data: articles, error: articleError } = await client
+      .from("articles")
+      .select("id,source_id,url,title,published_at,sources(id,name,authority_weight)")
+      .in("id", articleIds);
+    if (articleError) {
+      throw new Error(`load_articles_failed: ${articleError.message}`);
+    }
+
+    const articleRows = (articles ?? []) as ArticleSourceRow[];
+
+    sources = articleRows
+      .map((item): DetailSourceItem => {
+        const source =
+          Array.isArray(item.sources) ? item.sources[0] : item.sources;
+        return {
+          sourceId: item.source_id,
+          sourceName: source?.name ?? `source-${item.source_id}`,
+          url: String(item.url),
+          title: String(item.title),
+          publishedAt: item.published_at ?? null,
+          authorityWeight: Number(source?.authority_weight ?? 1),
+        };
+      })
+      .sort((a, b) => {
+        if (b.authorityWeight !== a.authorityWeight) {
+          return b.authorityWeight - a.authorityWeight;
+        }
+        return (b.publishedAt ?? "").localeCompare(a.publishedAt ?? "");
+      });
+  }
+
+  return {
+    id: String(event.id),
+    title: String(event.canonical_title),
+    category: normalizeCategory(String(event.category)),
+    hotScore: Number(event.hot_score),
+    summaryCn: (summaries?.[0]?.summary_cn as string | undefined) ?? "",
+    tags: normalizeTags((event as { tags?: unknown }).tags),
+    sources,
+  } as NewsDetailPayload;
 }
 
 export async function readNewsDetail(eventId: string) {
@@ -234,95 +472,18 @@ export async function readNewsDetail(eventId: string) {
         `news-detail:${eventId}`,
         async () => {
           const client = getSupabaseAdminClient();
-          const { data: event, error: eventError } = await client
-            .from("events")
-            .select("id,canonical_title,category,hot_score")
-            .eq("id", Number(eventId))
-            .maybeSingle();
-          if (eventError) {
-            throw new Error(`load_event_failed: ${eventError.message}`);
-          }
-          if (!event) {
+          const detail = await loadNewsDetailFromClient(client, eventId);
+          if (!detail) {
             return null;
           }
-
-          const { data: summaries, error: summaryError } = await client
-            .from("summaries")
-            .select("summary_cn,generated_at")
-            .eq("event_id", event.id)
-            .order("generated_at", { ascending: false })
-            .limit(1);
-          if (summaryError) {
-            throw new Error(`load_summary_failed: ${summaryError.message}`);
-          }
-
-          const { data: mappings, error: mappingError } = await client
-            .from("event_articles")
-            .select("article_id")
-            .eq("event_id", event.id);
-          if (mappingError) {
-            throw new Error(`load_event_articles_failed: ${mappingError.message}`);
-          }
-
-          const articleIds = ((mappings ?? []) as EventArticleMappingRow[]).map((item) => item.article_id);
-          let sources: Array<{
-            sourceId: number;
-            sourceName: string;
-            url: string;
-            title: string;
-            publishedAt: string | null;
-            authorityWeight: number;
-          }> = [];
-          if (articleIds.length > 0) {
-            const { data: articles, error: articleError } = await client
-              .from("articles")
-              .select("id,source_id,url,title,published_at")
-              .in("id", articleIds);
-            if (articleError) {
-              throw new Error(`load_articles_failed: ${articleError.message}`);
-            }
-
-            const articleRows = (articles ?? []) as ArticleSourceRow[];
-            const sourceIds = [...new Set(articleRows.map((item) => item.source_id))];
-            const { data: sourceRows } = await client
-              .from("sources")
-              .select("id,name,authority_weight")
-              .in("id", sourceIds);
-            const sourceMetaById = new Map<number, { name: string; authorityWeight: number }>(
-              ((sourceRows ?? []) as SourceWeightRow[]).map((item) => [
-                item.id,
-                {
-                  name: item.name,
-                  authorityWeight: Number(item.authority_weight ?? 1),
-                },
-              ]),
-            );
-
-            sources = articleRows
-              .map((item): DetailSourceItem => ({
-                sourceId: item.source_id,
-                sourceName: sourceMetaById.get(item.source_id)?.name ?? `source-${item.source_id}`,
-                url: String(item.url),
-                title: String(item.title),
-                publishedAt: item.published_at ?? null,
-                authorityWeight: sourceMetaById.get(item.source_id)?.authorityWeight ?? 1,
-              }))
-              .sort((a, b) => {
-                if (b.authorityWeight !== a.authorityWeight) {
-                  return b.authorityWeight - a.authorityWeight;
-                }
-                return (b.publishedAt ?? "").localeCompare(a.publishedAt ?? "");
-              });
-          }
-
+          const tags =
+            detail.tags.length > 0
+              ? detail.tags
+              : await resolveEventTags({ eventId: detail.id, category: detail.category });
           return {
-            id: String(event.id),
-            title: String(event.canonical_title),
-            category: String(event.category),
-            hotScore: Number(event.hot_score),
-            summaryCn: (summaries?.[0]?.summary_cn as string | undefined) ?? "",
-            sources,
-          };
+            ...detail,
+            tags,
+          } as NewsDetailPayload;
         },
         READ_CACHE_TTL_MS,
       );
@@ -349,14 +510,19 @@ export async function readNewsDetail(eventId: string) {
     }))
     .sort((a, b) => b.authorityWeight - a.authorityWeight);
 
-  return {
+  const detail: NewsDetailPayload = {
     id: event.id,
     title: event.canonicalTitle,
-    category: event.category,
+    category: normalizeCategory(event.category),
     hotScore: event.hotScore,
     summaryCn: summary?.summaryCn ?? "",
+    tags: normalizeTags((event as { tags?: unknown }).tags),
     sources,
   };
+  if (detail.tags.length === 0) {
+    detail.tags = await resolveEventTags({ eventId: detail.id, category: detail.category });
+  }
+  return detail;
 }
 
 export async function readPipelineHealth(now = new Date()) {

@@ -3,7 +3,12 @@ import { notFound } from "next/navigation";
 import { EmptyStateRecommendations } from "@/components/empty-state-recommendations";
 import { NewsCard } from "@/components/news-card";
 import { readCategorySnapshot, readHomeSnapshot } from "@/lib/pipeline/read-model";
-import { getCategoryLabel, getCategoryHref, isKnownCategory } from "@/lib/ui/categories";
+import {
+  getCategoryHref,
+  getCategoryLabel,
+  isKnownCategory,
+  normalizeCategory,
+} from "@/lib/ui/categories";
 
 export const revalidate = 120;
 
@@ -15,9 +20,12 @@ type CategoryPageProps = {
 type CategoryEvent = {
   id: string;
   category?: string;
+  categories?: string[];
+  tags?: string[];
   canonicalTitle: string;
   summaryCn?: string;
   hotScore?: number;
+  lastPublishedAt?: string;
 };
 
 const PAGE_SIZE = 20;
@@ -33,22 +41,23 @@ export default async function CategoryPage({
   if (!isKnownCategory(slug)) {
     notFound();
   }
+  const category = normalizeCategory(slug);
 
-  const categorySnapshot = await readCategorySnapshot(slug, page, PAGE_SIZE);
+  const categorySnapshot = await readCategorySnapshot(category, page, PAGE_SIZE);
   const events = categorySnapshot.events as CategoryEvent[];
   let recommendationPool: Array<CategoryEvent & { category: string }> = [];
   if (events.length === 0) {
     const homeSnapshot = await readHomeSnapshot();
     recommendationPool = (homeSnapshot.events as CategoryEvent[]).filter(
       (item): item is CategoryEvent & { category: string } =>
-        typeof item.category === "string" && item.category !== slug,
+        typeof item.category === "string" && item.category !== category,
     );
   }
 
-  const categoryLabel = getCategoryLabel(slug);
+  const categoryLabel = getCategoryLabel(category);
   const total = categorySnapshot.total;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const baseHref = getCategoryHref(slug);
+  const baseHref = getCategoryHref(category);
   const previousHref = `${baseHref}?page=${Math.max(1, page - 1)}`;
   const nextHref = `${baseHref}?page=${Math.min(totalPages, page + 1)}`;
 
@@ -80,7 +89,10 @@ export default async function CategoryPage({
                   title={event.canonicalTitle}
                   summaryCn={event.summaryCn}
                   hotScore={event.hotScore}
-                  meta={getCategoryLabel(event.category ?? slug)}
+                  meta={getCategoryLabel(event.category ?? category)}
+                  categories={event.categories}
+                  tags={event.tags}
+                  updatedAt={event.lastPublishedAt}
                 />
               ))}
             </div>

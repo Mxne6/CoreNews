@@ -8,8 +8,8 @@ beforeEach(() => {
     generatedAt: new Date("2026-03-02T00:00:00.000Z"),
     homePayload: [
       {
-        id: "ai:event-1",
-        category: "ai",
+        id: "tech:event-1",
+        category: "tech",
         canonicalTitle: "OpenAI releases GPT-5",
         hotScore: 88.2,
         articleCount: 4,
@@ -28,8 +28,8 @@ describe("GET /api/home", () => {
     };
 
     expect(response.status).toBe(200);
-    expect(body.events[0].category).toBe("ai");
-    expect(body.events[0].id).toBe("ai:event-1");
+    expect(body.events[0].category).toBe("tech");
+    expect(body.events[0].id).toBe("tech:event-1");
   });
 });
 

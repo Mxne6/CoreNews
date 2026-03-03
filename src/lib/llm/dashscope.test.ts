@@ -97,3 +97,35 @@ describe("DashScopeClient.translateTitleToChinese", () => {
     expect(payload.messages[0]?.content).toContain("Translate headline to concise Chinese");
   });
 });
+
+describe("DashScopeClient.summarizeEventWithTags", () => {
+  it("returns summary and tags from a single llm response", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content:
+                "{\"summary\":\"关键进展摘要内容，覆盖影响与后续观察。\",\"tags\":[\"关税\",\"供应链\",\"政策\"]}",
+            },
+          },
+        ],
+      }),
+    }));
+    // @ts-expect-error test override
+    global.fetch = fetchMock;
+
+    const client = new DashScopeClient("test-key");
+    const result = await client.summarizeEventWithTags({
+      title: "Tariff policy update",
+      category: "policy",
+      articleCount: 6,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.summary).toContain("关键进展");
+    expect(result.tags).toEqual(["关税", "供应链", "政策"]);
+  });
+});

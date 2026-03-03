@@ -1,7 +1,11 @@
 import { clusterArticlesBySimilarity } from "@/lib/pipeline/cluster";
 import { buildContentHash } from "@/lib/pipeline/normalize";
-import { resolveAmbiguousGroups, type AmbiguityResolverClient } from "@/lib/pipeline/resolve-ambiguous";
+import {
+  resolveAmbiguousGroups,
+  type AmbiguityResolverClient,
+} from "@/lib/pipeline/resolve-ambiguous";
 import { computeHotScore } from "@/lib/pipeline/scoring";
+import { normalizeCategory, type CategorySlug } from "@/lib/ui/categories";
 
 export type AggregationSource = {
   id: number;
@@ -22,6 +26,7 @@ export type AggregatedEvent = {
   eventStableKey: string;
   canonicalTitle: string;
   category: string;
+  categories: string[];
   hotScore: number;
   articleCount: number;
   firstPublishedAt: string;
@@ -39,6 +44,7 @@ type AggregateInput = {
   now: Date;
   windowDays: number;
   ambiguityResolver?: AmbiguityResolverClient | null;
+  ambiguityLimit?: number;
 };
 
 type EventBundle = {
@@ -46,11 +52,153 @@ type EventBundle = {
   canonicalTitle: string;
 };
 
+const FLAT_CATEGORY_ORDER: CategorySlug[] = [
+  "domestic",
+  "international",
+  "current-affairs",
+  "society",
+  "finance",
+  "tech",
+  "sports",
+  "entertainment",
+  "culture-education",
+  "lifestyle",
+];
+
+const FLAT_CATEGORY_KEYWORDS: Record<CategorySlug, string[]> = {
+  domestic: [
+    "中国",
+    "国内",
+    "本土",
+    "内地",
+    "中共中央",
+    "国务院",
+    "全国",
+    "北京",
+    "上海",
+    "广州",
+    "深圳",
+  ],
+  international: [
+    "国际",
+    "全球",
+    "world",
+    "global",
+    "international",
+    "联合国",
+    "欧盟",
+    "美国",
+    "日本",
+    "欧洲",
+    "中东",
+  ],
+  "current-affairs": [
+    "时政",
+    "政治",
+    "外交",
+    "政府",
+    "选举",
+    "法案",
+    "议会",
+    "总统",
+    "总理",
+    "制裁",
+    "政策",
+    "监管",
+  ],
+  society: [
+    "社会",
+    "民生",
+    "治安",
+    "事故",
+    "灾害",
+    "法院",
+    "警方",
+    "犯罪",
+    "公益",
+    "公共服务",
+  ],
+  finance: [
+    "财经",
+    "经济",
+    "金融",
+    "市场",
+    "股市",
+    "债券",
+    "汇率",
+    "利率",
+    "通胀",
+    "就业",
+    "ipo",
+    "收购",
+  ],
+  tech: [
+    "科技",
+    "ai",
+    "gpt",
+    "llm",
+    "openai",
+    "芯片",
+    "半导体",
+    "算力",
+    "软件",
+    "云计算",
+  ],
+  sports: [
+    "体育",
+    "足球",
+    "篮球",
+    "网球",
+    "奥运",
+    "世界杯",
+    "联赛",
+    "比赛",
+    "夺冠",
+  ],
+  entertainment: [
+    "娱乐",
+    "电影",
+    "电视剧",
+    "综艺",
+    "明星",
+    "艺人",
+    "票房",
+    "演唱会",
+  ],
+  "culture-education": [
+    "文化",
+    "教育",
+    "高校",
+    "学校",
+    "考试",
+    "大学",
+    "艺术",
+    "展览",
+    "博物馆",
+    "出版",
+  ],
+  lifestyle: [
+    "生活",
+    "健康",
+    "旅游",
+    "美食",
+    "消费",
+    "住房",
+    "天气",
+    "出行",
+    "养老",
+    "家庭",
+  ],
+};
+
 function resolvePublishedAt(article: AggregationArticle): Date {
   return new Date(article.publishedAt ?? article.publishedAtFallback);
 }
 
-function pickCategory(articles: AggregationArticle[], sourceById: Map<number, AggregationSource>): string {
+function pickCategory(
+  articles: AggregationArticle[],
+  sourceById: Map<number, AggregationSource>,
+): string {
   const categoryCounts = new Map<string, number>();
   for (const article of articles) {
     const category = sourceById.get(article.sourceId)?.category ?? "other";
@@ -59,11 +207,136 @@ function pickCategory(articles: AggregationArticle[], sourceById: Map<number, Ag
   return [...categoryCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "other";
 }
 
+function normalizeForKeyword(text: string): string {
+  return ` ${text.toLowerCase()} `;
+}
+
+function detectTitleCategoryBonus(title: string): Map<CategorySlug, number> {
+  const normalized = normalizeForKeyword(title);
+  const bonus = new Map<CategorySlug, number>();
+
+  for (const category of FLAT_CATEGORY_ORDER) {
+    const keywords = FLAT_CATEGORY_KEYWORDS[category];
+    let matches = 0;
+    for (const keyword of keywords) {
+      const needle = normalizeForKeyword(keyword);
+      if (normalized.includes(needle)) {
+        matches += 1;
+      }
+    }
+    if (matches > 0) {
+      bonus.set(category, Math.min(2, matches) * 1.4);
+    }
+  }
+
+  return bonus;
+}
+
+const SOURCE_CATEGORY_PRIOR: Record<string, CategorySlug> = {
+  ai: "tech",
+  tech: "tech",
+  business: "finance",
+  markets: "finance",
+  policy: "current-affairs",
+  china: "domestic",
+  us: "international",
+  japan: "international",
+  europe: "international",
+  world: "international",
+  energy: "finance",
+  health: "lifestyle",
+  sports: "sports",
+  entertainment: "entertainment",
+  "culture-education": "culture-education",
+  lifestyle: "lifestyle",
+  domestic: "domestic",
+  international: "international",
+  "current-affairs": "current-affairs",
+  society: "society",
+  finance: "finance",
+};
+
+function resolveSourcePriorCategory(sourceCategory?: string): CategorySlug {
+  if (!sourceCategory) {
+    return "international";
+  }
+  const key = sourceCategory.trim().toLowerCase();
+  return SOURCE_CATEGORY_PRIOR[key] ?? normalizeCategory(sourceCategory);
+}
+
+function pickCategories(
+  input: {
+    canonicalTitle: string;
+    articles: AggregationArticle[];
+  },
+  sourceById: Map<number, AggregationSource>,
+): CategorySlug[] {
+  const scoreByCategory = new Map<CategorySlug, number>(
+    FLAT_CATEGORY_ORDER.map((item) => [item, 0]),
+  );
+  const sourceSets = new Map<CategorySlug, Set<number>>();
+  const articleCountByCategory = new Map<CategorySlug, number>();
+
+  for (const article of input.articles) {
+    const source = sourceById.get(article.sourceId);
+    const category = resolveSourcePriorCategory(source?.category);
+    const authority = source?.authorityWeight ?? 1;
+
+    if (!sourceSets.has(category)) {
+      sourceSets.set(category, new Set<number>());
+    }
+    sourceSets.get(category)?.add(article.sourceId);
+    articleCountByCategory.set(category, (articleCountByCategory.get(category) ?? 0) + 1);
+    scoreByCategory.set(category, (scoreByCategory.get(category) ?? 0) + authority * 1.2);
+  }
+
+  for (const [category, set] of sourceSets.entries()) {
+    scoreByCategory.set(category, (scoreByCategory.get(category) ?? 0) + set.size * 2);
+  }
+  for (const [category, count] of articleCountByCategory.entries()) {
+    scoreByCategory.set(category, (scoreByCategory.get(category) ?? 0) + Math.log1p(count));
+  }
+
+  const keywordBonus = detectTitleCategoryBonus(input.canonicalTitle);
+  for (const [category, bonus] of keywordBonus.entries()) {
+    scoreByCategory.set(category, (scoreByCategory.get(category) ?? 0) + bonus * 1.35);
+  }
+
+  const ranked = [...scoreByCategory.entries()].sort((a, b) => {
+    if (b[1] !== a[1]) {
+      return b[1] - a[1];
+    }
+    return FLAT_CATEGORY_ORDER.indexOf(a[0]) - FLAT_CATEGORY_ORDER.indexOf(b[0]);
+  });
+
+  const primary = ranked[0]?.[0];
+  if (!primary) {
+    return ["international"];
+  }
+  return [primary];
+}
+
 function resolveArticleCategory(
-  article: Pick<AggregationArticle, "sourceId">,
+  article: Pick<AggregationArticle, "sourceId" | "title" | "normalizedTitle">,
   sourceById: Map<number, AggregationSource>,
 ): string {
-  return sourceById.get(article.sourceId)?.category ?? "other";
+  const sourceCategory = sourceById.get(article.sourceId)?.category;
+  const prior = resolveSourcePriorCategory(sourceCategory);
+  const mergedText = `${article.title} ${article.normalizedTitle}`.trim();
+  const bonus = detectTitleCategoryBonus(mergedText);
+  if (bonus.size === 0) {
+    return prior;
+  }
+  let best: CategorySlug = prior;
+  let bestScore = (bonus.get(prior) ?? 0) + 1.2;
+  for (const category of FLAT_CATEGORY_ORDER) {
+    const candidateScore = (bonus.get(category) ?? 0) + (category === prior ? 1.2 : 0);
+    if (candidateScore > bestScore) {
+      best = category;
+      bestScore = candidateScore;
+    }
+  }
+  return best;
 }
 
 function buildCategoryScopedGroups(
@@ -136,14 +409,29 @@ export async function aggregateEventsRolling(input: AggregateInput): Promise<{
           normalizedTitle: article.normalizedTitle,
         })),
       }));
-    if (ambiguous.length > 0) {
-      const resolved = await resolveAmbiguousGroups(ambiguous, input.ambiguityResolver);
+
+    const resolverLimit = Math.max(
+      0,
+      Math.min(input.ambiguityLimit ?? ambiguous.length, ambiguous.length),
+    );
+    const toResolve = ambiguous.slice(0, resolverLimit);
+    const overflow = ambiguous.slice(resolverLimit);
+
+    if (toResolve.length > 0) {
+      const resolved = await resolveAmbiguousGroups(toResolve, input.ambiguityResolver);
       for (const item of resolved) {
         resolvedByGroupId.set(item.groupId, {
           canonicalTitle: item.canonicalTitle,
           merged: item.merged,
         });
       }
+    }
+
+    for (const group of overflow) {
+      resolvedByGroupId.set(group.groupId, {
+        canonicalTitle: "",
+        merged: false,
+      });
     }
   }
 
@@ -177,7 +465,14 @@ export async function aggregateEventsRolling(input: AggregateInput): Promise<{
   const eventMappings: EventArticleMapping[] = [];
 
   for (const bundle of bundles) {
-    const category = pickCategory(bundle.articles, sourceById);
+    const categories = pickCategories(
+      {
+        canonicalTitle: bundle.canonicalTitle,
+        articles: bundle.articles,
+      },
+      sourceById,
+    );
+    const category = categories[0] ?? "international";
     const authorityWeightSum = bundle.articles.reduce(
       (sum, article) => sum + (sourceById.get(article.sourceId)?.authorityWeight ?? 1),
       0,
@@ -207,6 +502,7 @@ export async function aggregateEventsRolling(input: AggregateInput): Promise<{
       eventStableKey,
       canonicalTitle: bundle.canonicalTitle,
       category,
+      categories: [category],
       hotScore,
       articleCount: bundle.articles.length,
       firstPublishedAt: firstPublishedAt.toISOString(),

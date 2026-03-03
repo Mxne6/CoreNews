@@ -1,10 +1,11 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   buildAuthHeaders,
   buildEndpointUrl,
   didRunSucceedAfterRequestedAt,
   normalizeBaseUrl,
   parseArgs,
+  runDailyNow,
 } from "../../scripts/ops/run-daily-now-lib.mjs";
 
 describe("run-daily-now-lib", () => {
@@ -66,5 +67,35 @@ describe("run-daily-now-lib", () => {
         nowIso,
       ),
     ).toBe(false);
+  });
+
+  test("runDailyNow continues health checks when trigger request times out", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("fetch failed"))
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            runs: [{ status: "success", startedAt: "2099-01-01T00:00:00.000Z" }],
+          }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ generatedAt: "2099-01-01T00:00:00.000Z", events: [] }),
+      });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await runDailyNow({
+      baseUrl: "http://localhost:3000",
+      secret: "secret",
+    });
+
+    expect(result.trigger.ok).toBe(false);
+    expect(result.trigger.status).toBe(0);
+    expect(result.health.ok).toBe(true);
+    expect(result.effectiveSuccess).toBe(true);
   });
 });

@@ -14,13 +14,13 @@ beforeEach(() => {
   readCategorySnapshotMock.mockReset();
   readHomeSnapshotMock.mockReset();
   readCategorySnapshotMock.mockResolvedValue({
-    category: "ai",
+    category: "tech",
     page: 2,
     pageSize: 20,
     total: 45,
     events: [
-      { id: "ai:event-21", category: "ai", canonicalTitle: "AI 事件 21", hotScore: 84 },
-      { id: "ai:event-22", category: "ai", canonicalTitle: "AI 事件 22", hotScore: 83 },
+      { id: "tech:event-21", category: "tech", canonicalTitle: "AI 事件 21", hotScore: 84 },
+      { id: "tech:event-22", category: "tech", canonicalTitle: "AI 事件 22", hotScore: 83 },
     ],
   });
   readHomeSnapshotMock.mockResolvedValue({
@@ -33,14 +33,14 @@ beforeEach(() => {
         hotScore: 79,
       },
       {
-        id: "world:event-1",
-        category: "world",
+        id: "international:event-1",
+        category: "international",
         canonicalTitle: "国际事件 1",
         hotScore: 77,
       },
       {
-        id: "japan:event-1",
-        category: "japan",
+        id: "international:event-2",
+        category: "international",
         canonicalTitle: "日本事件 1",
         hotScore: 75,
       },
@@ -51,12 +51,12 @@ beforeEach(() => {
 describe("CategoryPage", () => {
   it("renders paginated events by category", async () => {
     const ui = await CategoryPage({
-      params: Promise.resolve({ slug: "ai" }),
+      params: Promise.resolve({ slug: "tech" }),
       searchParams: Promise.resolve({ page: "2" }),
     });
     render(ui);
 
-    expect(screen.getByText("AI 热点情报")).toBeInTheDocument();
+    expect(screen.getByText("科技 热点情报")).toBeInTheDocument();
     expect(screen.getByText("AI 事件 21")).toBeInTheDocument();
     expect(screen.queryByText("AI 事件 1")).not.toBeInTheDocument();
     expect(readHomeSnapshotMock).not.toHaveBeenCalled();
@@ -64,11 +64,11 @@ describe("CategoryPage", () => {
     expect(screen.getAllByText("AI").length).toBeGreaterThan(1);
     expect(screen.getByRole("link", { name: "上一页" })).toHaveAttribute(
       "href",
-      "/category/ai?page=1",
+      "/category/tech?page=1",
     );
     expect(screen.getByRole("link", { name: "下一页" })).toHaveAttribute(
       "href",
-      "/category/ai?page=3",
+      "/category/tech?page=3",
     );
   });
 

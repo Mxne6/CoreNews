@@ -56,8 +56,8 @@ describe("core news schema migrations", () => {
     db.public.none(`
       insert into sources (name, rss_url, authority_weight, category)
       values
-      ('Reuters', 'https://example.com/reuters-rss', 1.2, 'world'),
-      ('BBC', 'https://example.com/bbc-rss', 1.1, 'world');
+      ('Reuters', 'https://example.com/reuters-rss', 1.2, 'international'),
+      ('BBC', 'https://example.com/bbc-rss', 1.1, 'international');
     `);
 
     db.public.none(`
@@ -121,21 +121,21 @@ describe("core news schema migrations", () => {
     expect(() =>
       db.public.none(`
         insert into sources (name, rss_url, authority_weight, category)
-        values ('Valid Source', 'https://example.com/valid-rss', 1.00, 'world');
+        values ('Valid Source', 'https://example.com/valid-rss', 1.00, 'international');
       `),
     ).not.toThrow();
 
     expect(() =>
       db.public.none(`
         insert into sources (name, rss_url, authority_weight, category)
-        values ('Too Low', 'https://example.com/low-rss', 0.79, 'world');
+        values ('Too Low', 'https://example.com/low-rss', 0.79, 'international');
       `),
     ).toThrow();
 
     expect(() =>
       db.public.none(`
         insert into sources (name, rss_url, authority_weight, category)
-        values ('Too High', 'https://example.com/high-rss', 1.31, 'world');
+        values ('Too High', 'https://example.com/high-rss', 1.31, 'international');
       `),
     ).toThrow();
   });
@@ -150,5 +150,50 @@ describe("core news schema migrations", () => {
     expect(sql).toContain("where status = 'success'");
     expect(sql).toContain("idx_snapshots_key_generated_at");
     expect(sql).toContain("on snapshots(key, generated_at desc)");
+  });
+
+  it("adds source health tracking columns and failure count constraint", () => {
+    const db = applyMigrations();
+    db.public.none(`
+      insert into sources (name, rss_url, authority_weight, category, consecutive_failures, last_error)
+      values ('Health Source', 'https://example.com/health-rss', 1.00, 'international', 2, 'timeout');
+    `);
+
+    const rows = db.public.many(
+      "select consecutive_failures, last_error from sources where rss_url = 'https://example.com/health-rss';",
+    ) as Array<{ consecutive_failures: number; last_error: string | null }>;
+
+    expect(rows[0].consecutive_failures).toBe(2);
+    expect(rows[0].last_error).toBe("timeout");
+
+    expect(() =>
+      db.public.none(`
+        insert into sources (name, rss_url, authority_weight, category, consecutive_failures)
+        values ('Invalid Health Source', 'https://example.com/invalid-health-rss', 1.00, 'international', -1);
+      `),
+    ).toThrow();
+  });
+
+  it("enforces strict flat ten categories on sources and events", () => {
+    const db = applyMigrations();
+
+    expect(() =>
+      db.public.none(`
+        insert into sources (name, rss_url, authority_weight, category)
+        values ('Legacy Category Source', 'https://example.com/legacy-rss', 1.00, 'world');
+      `),
+    ).toThrow();
+
+    db.public.none(`
+      insert into pipeline_runs (started_at, status)
+      values ('2026-03-02T00:00:00.000Z', 'running');
+    `);
+
+    expect(() =>
+      db.public.none(`
+        insert into events (canonical_title, category, window_start, window_end)
+        values ('Legacy Event', 'world', '2026-03-02T00:00:00.000Z', '2026-03-03T00:00:00.000Z');
+      `),
+    ).toThrow();
   });
 });

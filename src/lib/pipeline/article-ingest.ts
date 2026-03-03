@@ -6,6 +6,9 @@ export type ActiveSource = {
   rss_url: string;
   category: string;
   authority_weight: number;
+  is_active?: boolean;
+  consecutive_failures?: number;
+  last_failed_at?: string | null;
 };
 
 export type SourceError = {
@@ -101,11 +104,13 @@ type IngestInput = {
   sources: ActiveSource[];
   fetchFeed: (rssUrl: string) => Promise<RssFeedItem[]>;
   now: Date;
+  failureDeactivateThreshold?: number;
 };
 
 export async function ingestArticlesFromSources(input: IngestInput) {
   const sourceErrors: SourceError[] = [];
   const rows: Record<string, unknown>[] = [];
+  const failureDeactivateThreshold = Math.max(1, input.failureDeactivateThreshold ?? 3);
 
   for (const source of input.sources) {
     try {
@@ -113,16 +118,52 @@ export async function ingestArticlesFromSources(input: IngestInput) {
       for (const item of items) {
         rows.push(prepareArticleRecord(source, item, input.now));
       }
-      const updater = input.client.from("sources").update;
-      if (updater) {
-        await updater({ last_fetched_at: input.now.toISOString() }).eq("id", source.id);
+      const sourceTable = input.client.from("sources");
+      if (sourceTable.update) {
+        const { error } = await sourceTable.update({
+          last_fetched_at: input.now.toISOString(),
+          consecutive_failures: 0,
+          is_active: true,
+          last_error: null,
+          last_failed_at: null,
+        }).eq("id", source.id);
+        if (error) {
+          sourceErrors.push({
+            sourceId: source.id,
+            rssUrl: source.rss_url,
+            error: `source_status_update_failed: ${error.message}`,
+          });
+        }
       }
     } catch (error) {
+      const errorMessage = (error as Error).message;
       sourceErrors.push({
         sourceId: source.id,
         rssUrl: source.rss_url,
-        error: (error as Error).message,
+        error: errorMessage,
       });
+
+      const sourceTable = input.client.from("sources");
+      if (sourceTable.update) {
+        const nextConsecutiveFailures = (source.consecutive_failures ?? 0) + 1;
+        const nextIsActive =
+          nextConsecutiveFailures >= failureDeactivateThreshold
+            ? false
+            : (source.is_active ?? true);
+        const { error: updateError } = await sourceTable.update({
+          consecutive_failures: nextConsecutiveFailures,
+          is_active: nextIsActive,
+          last_error: errorMessage,
+          last_failed_at: input.now.toISOString(),
+        }).eq("id", source.id);
+        if (updateError) {
+          sourceErrors.push({
+            sourceId: source.id,
+            rssUrl: source.rss_url,
+            error: `source_status_update_failed: ${updateError.message}`,
+          });
+        }
+      }
     }
   }
 

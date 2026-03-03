@@ -14,8 +14,8 @@ beforeEach(() => {
     generatedAt: "2026-03-02T00:00:00.000Z",
     events: [
       {
-        id: "ai:event-1",
-        category: "ai",
+        id: "tech:event-1",
+        category: "tech",
         canonicalTitle: "OpenAI 发布 GPT-5 模型",
         hotScore: 88.2,
         summaryCn: "示例摘要",
@@ -28,8 +28,8 @@ beforeEach(() => {
         summaryCn: "科技板块示例摘要",
       },
       {
-        id: "world:event-3",
-        category: "world",
+        id: "international:event-3",
+        category: "international",
         canonicalTitle: "国际油价出现明显波动",
         hotScore: 70.2,
         summaryCn: "国际板块示例摘要",
