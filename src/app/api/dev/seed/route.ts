@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { defaultPipelineStore } from "@/lib/pipeline/run-daily";
 
 export async function GET() {
@@ -11,47 +11,49 @@ export async function GET() {
     id: "a1",
     sourceId: 1,
     url: "https://example.com/a1",
-    title: "OpenAI releases GPT-5",
-    normalizedTitle: "openai releases gpt 5",
+    title: "OpenAI 发布 GPT-5 模型",
+    normalizedTitle: "openai 发布 gpt 5 模型",
     contentHash: "h1",
     publishedAt: new Date("2026-03-02T00:00:00.000Z"),
-    category: "ai",
+    category: "tech",
   });
 
   defaultPipelineStore.events.push({
-    id: "ai-openai-releases-gpt-5",
-    category: "ai",
-    canonicalTitle: "OpenAI releases GPT-5",
+    id: "tech-openai-releases-gpt-5",
+    category: "tech",
+    canonicalTitle: "OpenAI 发布 GPT-5 模型",
     hotScore: 88.2,
     articleIds: ["a1"],
   });
 
   defaultPipelineStore.summaries.push({
-    eventId: "ai-openai-releases-gpt-5",
-    summaryCn: "OpenAI released GPT-5 according to multiple sources.",
+    eventId: "tech-openai-releases-gpt-5",
+    summaryCn: "多家媒体持续跟进 OpenAI 发布 GPT-5 模型这一事件。",
     modelName: "qwen-max",
     modelVersion: "seed",
   });
 
   defaultPipelineStore.snapshots.push({
     generatedAt: new Date("2026-03-02T00:00:00.000Z"),
-    homePayload: {
-      ai: [
-        {
-          id: "ai-openai-releases-gpt-5",
-          canonicalTitle: "OpenAI releases GPT-5",
-          hotScore: 88.2,
-          summaryCn: "OpenAI released GPT-5 according to multiple sources.",
-        },
-      ],
-    },
+    homePayload: [
+      {
+        id: "tech-openai-releases-gpt-5",
+        category: "tech",
+        tags: ["AI", "大模型"],
+        canonicalTitle: "OpenAI 发布 GPT-5 模型",
+        hotScore: 88.2,
+        summaryCn: "多家媒体持续跟进 OpenAI 发布 GPT-5 模型这一事件。",
+      },
+    ],
     categoryPayloads: {
-      ai: [
+      tech: [
         {
-          id: "ai-openai-releases-gpt-5",
-          canonicalTitle: "OpenAI releases GPT-5",
+          id: "tech-openai-releases-gpt-5",
+          category: "tech",
+          tags: ["AI", "大模型"],
+          canonicalTitle: "OpenAI 发布 GPT-5 模型",
           hotScore: 88.2,
-          summaryCn: "OpenAI released GPT-5 according to multiple sources.",
+          summaryCn: "多家媒体持续跟进 OpenAI 发布 GPT-5 模型这一事件。",
         },
       ],
     },
@@ -59,3 +61,4 @@ export async function GET() {
 
   return NextResponse.json({ ok: true });
 }
+

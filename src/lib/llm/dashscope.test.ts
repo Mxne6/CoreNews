@@ -51,7 +51,107 @@ describe("DashScopeClient.summarizeEvent", () => {
       articleCount: 4,
     });
 
-    expect(summary).toBe("mock summary");
+    const firstCall = fetchMock.mock.calls[0] as unknown as
+      | [RequestInfo | URL, RequestInit?]
+      | undefined;
+    const requestInit = firstCall?.[1];
+    const payload = JSON.parse(String(requestInit?.body ?? "")) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+
+    expect(summary.length).toBeGreaterThanOrEqual(45);
+    expect(summary).toContain("关键进展");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(payload.messages[1]?.content).toContain("90-140");
+  });
+});
+
+describe("DashScopeClient.translateTitleToChinese", () => {
+  it("returns translated Chinese title from mocked response", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ message: { content: "OpenAI 发布 GPT-5 模型" } }],
+      }),
+    }));
+    // @ts-expect-error test override
+    global.fetch = fetchMock;
+
+    const client = new DashScopeClient("test-key");
+    const translated = await client.translateTitleToChinese({
+      title: "OpenAI releases GPT-5",
+      category: "ai",
+    });
+
+    const firstCall = fetchMock.mock.calls[0] as unknown as
+      | [RequestInfo | URL, RequestInit?]
+      | undefined;
+    const requestInit = firstCall?.[1];
+    const payload = JSON.parse(String(requestInit?.body ?? "")) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+
+    expect(translated).toBe("OpenAI 发布 GPT-5 模型");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(payload.messages[0]?.content).toContain("Translate headline to concise Chinese");
+  });
+});
+
+describe("DashScopeClient.summarizeEventWithTags", () => {
+  it("returns summary and tags from a single llm response", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content:
+                "{\"summary\":\"关键进展摘要内容，覆盖影响与后续观察。\",\"tags\":[\"关税\",\"供应链\",\"政策\"]}",
+            },
+          },
+        ],
+      }),
+    }));
+    // @ts-expect-error test override
+    global.fetch = fetchMock;
+
+    const client = new DashScopeClient("test-key");
+    const result = await client.summarizeEventWithTags({
+      title: "Tariff policy update",
+      category: "policy",
+      articleCount: 6,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.summary).toContain("关键进展");
+    expect(result.tags).toEqual(["关税", "供应链", "政策"]);
+  });
+});
+
+describe("DashScopeClient.classifyCategory", () => {
+  it("returns allowed category slug from JSON response", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ message: { content: "{\"category\":\"finance\"}" } }],
+      }),
+    }));
+    // @ts-expect-error test override
+    global.fetch = fetchMock;
+
+    const client = new DashScopeClient("test-key");
+    const category = await client.classifyCategory({
+      canonicalTitle: "Platform update rollout expands",
+      candidateCategories: ["tech", "finance", "international"],
+      articleTitles: ["Platform update rollout expands"],
+      articleCount: 1,
+      sourceCategories: ["tech"],
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(category).toBe("finance");
   });
 });

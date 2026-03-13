@@ -11,7 +11,8 @@
     "test": "vitest run --coverage",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "ops:supabase": "node scripts/ops/supabase-bootstrap-health.mjs"
+    "ops:supabase": "node scripts/ops/supabase-bootstrap-health.mjs",
+    "run:daily": "node scripts/ops/run-daily-now.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.98.0",

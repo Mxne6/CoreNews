@@ -1,6 +1,6 @@
 # CoreNews
 
-CoreNews is a snapshot-first news dashboard for daily hotspots across categories.
+CoreNews is a snapshot-first news dashboard for daily hotspots across multiple primary categories.
 
 ## Stack
 
@@ -46,6 +46,10 @@ For local smoke tests only:
 - `GET /api/dev/seed`
 
 This primes in-memory demo data for homepage/category/detail navigation.
+
+Category pages use unified routes:
+
+- `/category/[slug]` (for example: `/category/ai`, `/category/world`)
 
 ## Tests
 

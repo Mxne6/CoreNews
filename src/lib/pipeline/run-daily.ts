@@ -2,6 +2,7 @@ import { clusterArticlesBySimilarity } from "@/lib/pipeline/cluster";
 import { dedupeIncomingArticles } from "@/lib/pipeline/dedupe";
 import { computeHotScore } from "@/lib/pipeline/scoring";
 import { buildSnapshotPayload } from "@/lib/pipeline/snapshot-builder";
+import { normalizeCategory } from "@/lib/ui/categories";
 
 export type PipelineArticle = {
   id: string;
@@ -17,8 +18,10 @@ export type PipelineArticle = {
 type PipelineEvent = {
   id: string;
   category: string;
+  categories?: string[];
   canonicalTitle: string;
   hotScore: number;
+  lastPublishedAt?: string;
   articleIds: string[];
 };
 
@@ -41,7 +44,7 @@ type PipelineRun = {
 
 type Snapshot = {
   generatedAt: Date;
-  homePayload: Record<string, unknown>;
+  homePayload: unknown[];
   categoryPayloads: Record<string, unknown>;
 };
 
@@ -91,6 +94,21 @@ function eventIdFromTitle(category: string, canonicalTitle: string): string {
   return `${category}:${slug}`;
 }
 
+function pickEventCategories(articleRefs: PipelineArticle[]): string[] {
+  const countByCategory = new Map<string, number>();
+  for (const article of articleRefs) {
+    const category = normalizeCategory(article.category);
+    countByCategory.set(category, (countByCategory.get(category) ?? 0) + 1);
+  }
+  const ranked = [...countByCategory.entries()].sort((a, b) => {
+    if (b[1] !== a[1]) {
+      return b[1] - a[1];
+    }
+    return a[0].localeCompare(b[0]);
+  });
+  return ranked.map(([category]) => category).slice(0, 3);
+}
+
 export async function runDailyPipeline(input: RunDailyInput): Promise<void> {
   const run: PipelineRun = {
     startedAt: input.now,
@@ -126,8 +144,8 @@ export async function runDailyPipeline(input: RunDailyInput): Promise<void> {
 
     const totalDeduped = dedupeIncomingArticles([...existing, ...incoming]);
     const seen = new Set(input.store.articles.map((item) => item.url));
-    const newArticles = input.incomingArticles.filter((item) =>
-      totalDeduped.some((deduped) => deduped.url === item.url) && !seen.has(item.url),
+    const newArticles = input.incomingArticles.filter(
+      (item) => totalDeduped.some((deduped) => deduped.url === item.url) && !seen.has(item.url),
     );
     input.store.articles.push(...newArticles);
 
@@ -148,7 +166,7 @@ export async function runDailyPipeline(input: RunDailyInput): Promise<void> {
       const articleRefs = group.articles
         .map((article) => input.store.articles.find((item) => item.id === article.id))
         .filter((item): item is PipelineArticle => Boolean(item));
-      const category = articleRefs[0]?.category ?? "other";
+      const rawCategory = normalizeCategory(articleRefs[0]?.category ?? "international");
 
       let canonicalTitle = first?.normalizedTitle ?? "untitled event";
       if (group.ambiguous && input.resolver) {
@@ -165,6 +183,8 @@ export async function runDailyPipeline(input: RunDailyInput): Promise<void> {
         canonicalTitle = result.canonicalTitle;
       }
 
+      const categories = pickEventCategories(articleRefs);
+      const category = normalizeCategory(categories[0] ?? rawCategory);
       const id = eventIdFromTitle(category, canonicalTitle);
       const coverageCount = new Set(articleRefs.map((item) => item.sourceId)).size;
       const lastPublishedAt = articleRefs.reduce(
@@ -183,13 +203,17 @@ export async function runDailyPipeline(input: RunDailyInput): Promise<void> {
       nextEvents.push({
         id,
         category,
+        categories: [category],
         canonicalTitle,
         hotScore,
+        lastPublishedAt: lastPublishedAt.toISOString(),
         articleIds: articleRefs.map((item) => item.id),
       });
       nextSummaries.push({
         eventId: id,
-        summaryCn: `该事件由 ${coverageCount} 家媒体报道，请查看原文获取完整细节。`,
+        summaryCn:
+          `${canonicalTitle} 在多源报道中持续发酵，当前已汇聚 ${coverageCount} 家媒体跟进。` +
+          "摘要聚焦关键进展与后续影响，建议结合原文交叉核对细节。",
         modelName: "qwen-max",
         modelVersion: "fallback-v1",
       });
@@ -215,12 +239,14 @@ export async function runDailyPipeline(input: RunDailyInput): Promise<void> {
 
     const snapshotEvents = input.store.events.map((event) => ({
       id: event.id,
-      category: event.category,
+      category: normalizeCategory(event.category),
+      categories: [normalizeCategory(event.category)],
+      tags: [normalizeCategory(event.category)],
       canonicalTitle: event.canonicalTitle,
       hotScore: event.hotScore,
       articleCount: event.articleIds.length,
-      summaryCn:
-        input.store.summaries.find((summary) => summary.eventId === event.id)?.summaryCn ?? "",
+      lastPublishedAt: event.lastPublishedAt ?? input.now.toISOString(),
+      summaryCn: input.store.summaries.find((summary) => summary.eventId === event.id)?.summaryCn ?? "",
     }));
     const { homePayload, categoryPayloads } = buildSnapshotPayload(snapshotEvents);
     input.store.snapshots.push({

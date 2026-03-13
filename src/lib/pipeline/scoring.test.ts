@@ -23,6 +23,17 @@ function loadFixture(): Fixture {
 }
 
 describe("computeHotScore", () => {
+  it("matches v3 balanced scoring baseline fixture", () => {
+    const fixture = loadFixture();
+    const input = {
+      ...fixture,
+      lastPublishedAt: new Date(fixture.lastPublishedAt),
+      now: new Date(fixture.now),
+    };
+
+    expect(computeHotScore(input)).toBe(48.82);
+  });
+
   it("is deterministic with fixed input", () => {
     const fixture = loadFixture();
     const input = {
@@ -62,10 +73,52 @@ describe("computeHotScore", () => {
 
     expect(computeHotScore(fresh)).toBeGreaterThan(computeHotScore(stale));
   });
+
+  it("applies extra stale penalty after 48h without updates", () => {
+    const now = new Date("2026-03-03T08:00:00.000Z");
+    const at48h = {
+      category: "world",
+      coverageCount: 3,
+      authorityWeightSum: 3.5,
+      articleCount: 5,
+      lastPublishedAt: new Date("2026-03-01T08:00:00.000Z"),
+      now,
+    };
+    const at72h = {
+      ...at48h,
+      lastPublishedAt: new Date("2026-02-28T08:00:00.000Z"),
+    };
+
+    expect(computeHotScore(at72h)).toBeLessThan(computeHotScore(at48h) * 0.2);
+  });
+
+  it("penalizes single-source volume stuffing versus multi-source consensus", () => {
+    const now = new Date("2026-03-02T08:00:00.000Z");
+    const singleSourceHeavy = {
+      category: "world",
+      coverageCount: 1,
+      authorityWeightSum: 1.2,
+      articleCount: 8,
+      lastPublishedAt: new Date("2026-03-02T07:30:00.000Z"),
+      now,
+    };
+    const multiSourceConsensus = {
+      category: "world",
+      coverageCount: 4,
+      authorityWeightSum: 4.5,
+      articleCount: 8,
+      lastPublishedAt: new Date("2026-03-02T07:30:00.000Z"),
+      now,
+    };
+
+    expect(computeHotScore(multiSourceConsensus)).toBeGreaterThan(
+      computeHotScore(singleSourceHeavy),
+    );
+  });
 });
 
 describe("SCORING_VERSION", () => {
   it("is versioned for regression traceability", () => {
-    expect(SCORING_VERSION).toMatch(/^v\d+$/);
+    expect(SCORING_VERSION).toBe("v4");
   });
 });

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+﻿import { beforeEach, describe, expect, it } from "vitest";
 import { GET } from "@/app/api/category/[slug]/route";
 import { defaultPipelineStore } from "@/lib/pipeline/run-daily";
 
@@ -6,11 +6,12 @@ beforeEach(() => {
   defaultPipelineStore.snapshots.length = 0;
   defaultPipelineStore.snapshots.push({
     generatedAt: new Date("2026-03-02T00:00:00.000Z"),
-    homePayload: {},
+    homePayload: [],
     categoryPayloads: {
-      ai: Array.from({ length: 12 }).map((_, index) => ({
-        id: `ai:event-${index + 1}`,
-        canonicalTitle: `AI Event ${index + 1}`,
+      tech: Array.from({ length: 12 }).map((_, index) => ({
+        id: `tech:event-${index + 1}`,
+        category: "tech",
+        canonicalTitle: `Tech Event ${index + 1}`,
         hotScore: 90 - index,
       })),
     },
@@ -19,8 +20,8 @@ beforeEach(() => {
 
 describe("GET /api/category/[slug]", () => {
   it("supports pagination from snapshot payload", async () => {
-    const request = new Request("http://localhost:3000/api/category/ai?page=2&pageSize=5");
-    const response = await GET(request, { params: Promise.resolve({ slug: "ai" }) });
+    const request = new Request("http://localhost:3000/api/category/tech?page=2&pageSize=5");
+    const response = await GET(request, { params: Promise.resolve({ slug: "tech" }) });
     const body = (await response.json()) as {
       page: number;
       pageSize: number;
@@ -33,6 +34,14 @@ describe("GET /api/category/[slug]", () => {
     expect(body.pageSize).toBe(5);
     expect(body.total).toBe(12);
     expect(body.events).toHaveLength(5);
-    expect(body.events[0].id).toBe("ai:event-6");
+    expect(body.events[0].id).toBe("tech:event-6");
+  });
+
+  it("returns 404 for unknown category slug", async () => {
+    const request = new Request("http://localhost:3000/api/category/unknown?page=1&pageSize=5");
+    const response = await GET(request, { params: Promise.resolve({ slug: "unknown" }) });
+
+    expect(response.status).toBe(404);
   });
 });
+

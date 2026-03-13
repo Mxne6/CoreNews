@@ -73,4 +73,178 @@ describe("aggregateEventsRolling", () => {
     expect(result.events).toHaveLength(2);
     expect(result.eventMappings.every((item) => item.articleIds.length === 1)).toBe(true);
   });
+
+  it("caps ambiguity resolver calls by configured limit", async () => {
+    const callLog: string[] = [];
+    const resolver = {
+      resolveGroup: async (group: { groupId: string }) => {
+        callLog.push(group.groupId);
+        return { canonicalTitle: "merged", merged: true };
+      },
+    };
+    const ambiguousArticles: AggregationArticle[] = [
+      {
+        id: 41,
+        sourceId: 1,
+        title: "OpenAI releases GPT-5",
+        normalizedTitle: "openai releases gpt 5",
+        publishedAt: "2026-03-02T07:00:00.000Z",
+        publishedAtFallback: "2026-03-02T07:00:00.000Z",
+      },
+      {
+        id: 42,
+        sourceId: 2,
+        title: "OpenAI unveils GPT-5 model",
+        normalizedTitle: "openai unveils gpt 5 model",
+        publishedAt: "2026-03-02T06:50:00.000Z",
+        publishedAtFallback: "2026-03-02T06:50:00.000Z",
+      },
+      {
+        id: 43,
+        sourceId: 1,
+        title: "Nvidia launches new ai chip",
+        normalizedTitle: "nvidia launches new ai chip",
+        publishedAt: "2026-03-02T07:10:00.000Z",
+        publishedAtFallback: "2026-03-02T07:10:00.000Z",
+      },
+      {
+        id: 44,
+        sourceId: 2,
+        title: "Nvidia unveils ai semiconductor chip",
+        normalizedTitle: "nvidia unveils ai semiconductor chip",
+        publishedAt: "2026-03-02T07:05:00.000Z",
+        publishedAtFallback: "2026-03-02T07:05:00.000Z",
+      },
+    ];
+
+    const result = await aggregateEventsRolling({
+      articles: ambiguousArticles,
+      sources,
+      now,
+      windowDays: 3,
+      ambiguityResolver: resolver,
+      ambiguityLimit: 1,
+    });
+
+    expect(callLog).toHaveLength(1);
+    expect(result.events).toHaveLength(3);
+  });
+
+  it("does not merge same headline across different categories", async () => {
+    const crossCategoryArticles: AggregationArticle[] = [
+      {
+        id: 21,
+        sourceId: 1,
+        title: "Summit opens in Tokyo",
+        normalizedTitle: "summit opens in tokyo",
+        publishedAt: "2026-03-02T07:20:00.000Z",
+        publishedAtFallback: "2026-03-02T07:20:00.000Z",
+      },
+      {
+        id: 22,
+        sourceId: 3,
+        title: "Summit opens in Tokyo",
+        normalizedTitle: "summit opens in tokyo",
+        publishedAt: "2026-03-02T07:10:00.000Z",
+        publishedAtFallback: "2026-03-02T07:10:00.000Z",
+      },
+    ];
+
+    const result = await aggregateEventsRolling({
+      articles: crossCategoryArticles,
+      sources,
+      now,
+      windowDays: 3,
+    });
+
+    expect(result.events).toHaveLength(2);
+    expect(new Set(result.events.map((event) => event.category)).size).toBe(2);
+  });
+
+  it("uses strict flat category assignment for each event", async () => {
+    const mixedSources: AggregationSource[] = [{ id: 1, category: "tech", authorityWeight: 0.8 }];
+    const mixedArticles: AggregationArticle[] = [
+      {
+        id: 31,
+        sourceId: 1,
+        title: "OpenAI GPT model update",
+        normalizedTitle: "openai gpt model update",
+        publishedAt: "2026-03-02T07:40:00.000Z",
+        publishedAtFallback: "2026-03-02T07:40:00.000Z",
+      },
+    ];
+
+    const result = await aggregateEventsRolling({
+      articles: mixedArticles,
+      sources: mixedSources,
+      now,
+      windowDays: 3,
+    });
+
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0].categories).toEqual(["tech"]);
+    expect(result.events[0].category).toBe("tech");
+  });
+
+  it("maps legacy policy source category to flat current-affairs", async () => {
+    const policySources: AggregationSource[] = [
+      { id: 99, category: "policy", authorityWeight: 1.1 },
+    ];
+    const policyArticles: AggregationArticle[] = [
+      {
+        id: 199,
+        sourceId: 99,
+        title: "Cabinet approves new election bill",
+        normalizedTitle: "cabinet approves new election bill",
+        publishedAt: "2026-03-02T07:00:00.000Z",
+        publishedAtFallback: "2026-03-02T07:00:00.000Z",
+      },
+    ];
+
+    const result = await aggregateEventsRolling({
+      articles: policyArticles,
+      sources: policySources,
+      now,
+      windowDays: 3,
+    });
+
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0].category).toBe("current-affairs");
+  });
+
+  it("uses category classifier fallback when semantic confidence is low", async () => {
+    const classifierCalls: Array<{ title: string; candidates: string[] }> = [];
+    const lowConfidenceArticles: AggregationArticle[] = [
+      {
+        id: 301,
+        sourceId: 1,
+        title: "Platform update rollout expands",
+        normalizedTitle: "platform update rollout expands",
+        publishedAt: "2026-03-02T07:20:00.000Z",
+        publishedAtFallback: "2026-03-02T07:20:00.000Z",
+      },
+    ];
+
+    const result = await aggregateEventsRolling({
+      articles: lowConfidenceArticles,
+      sources,
+      now,
+      windowDays: 3,
+      categoryClassifier: {
+        classifyCategory: async (input) => {
+          classifierCalls.push({
+            title: input.canonicalTitle,
+            candidates: input.candidateCategories,
+          });
+          return "finance";
+        },
+      },
+      categoryClassifierLimit: 1,
+    });
+
+    expect(classifierCalls).toHaveLength(1);
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0].category).toBe("finance");
+  });
+
 });

@@ -28,6 +28,8 @@ describe("core news schema migrations", () => {
       expect.arrayContaining([
         "2026030201_core_news_schema.sql",
         "2026030202_pipeline_stability.sql",
+        "2026030203_source_authority_weight_range.sql",
+        "2026030204_read_model_perf_indexes.sql",
       ]),
     );
   });
@@ -54,8 +56,8 @@ describe("core news schema migrations", () => {
     db.public.none(`
       insert into sources (name, rss_url, authority_weight, category)
       values
-      ('Reuters', 'https://example.com/reuters-rss', 1.2, 'world'),
-      ('BBC', 'https://example.com/bbc-rss', 1.1, 'world');
+      ('Reuters', 'https://example.com/reuters-rss', 1.2, 'international'),
+      ('BBC', 'https://example.com/bbc-rss', 1.1, 'international');
     `);
 
     db.public.none(`
@@ -73,7 +75,7 @@ describe("core news schema migrations", () => {
     expect(() =>
       db.public.none(`
         insert into articles (source_id, title, normalized_title, url, lang, content_hash, dedupe_key)
-        values (2, 'B', 'b', 'https://example.com/b1', 'en', 'hash-3', 'dedupe-1');
+        values (2, 'B', 'b', 'https://example.com/a1', 'en', 'hash-3', 'dedupe-1');
       `),
     ).not.toThrow();
   });
@@ -111,5 +113,87 @@ describe("core news schema migrations", () => {
     expect(sql).toContain("add column if not exists payload_json jsonb");
     expect(sql).toContain("add column if not exists version text");
     expect(sql).toContain("uq_snapshots_run_key");
+  });
+
+  it("enforces authority_weight range between 0.80 and 1.30", () => {
+    const db = applyMigrations();
+
+    expect(() =>
+      db.public.none(`
+        insert into sources (name, rss_url, authority_weight, category)
+        values ('Valid Source', 'https://example.com/valid-rss', 1.00, 'international');
+      `),
+    ).not.toThrow();
+
+    expect(() =>
+      db.public.none(`
+        insert into sources (name, rss_url, authority_weight, category)
+        values ('Too Low', 'https://example.com/low-rss', 0.79, 'international');
+      `),
+    ).toThrow();
+
+    expect(() =>
+      db.public.none(`
+        insert into sources (name, rss_url, authority_weight, category)
+        values ('Too High', 'https://example.com/high-rss', 1.31, 'international');
+      `),
+    ).toThrow();
+  });
+
+  it("adds read-model performance indexes", () => {
+    const sql = fs.readFileSync(
+      path.join(migrationsDir, "2026030204_read_model_perf_indexes.sql"),
+      "utf8",
+    );
+    expect(sql).toContain("idx_pipeline_runs_success_started_at");
+    expect(sql).toContain("on pipeline_runs(started_at desc)");
+    expect(sql).toContain("where status = 'success'");
+    expect(sql).toContain("idx_snapshots_key_generated_at");
+    expect(sql).toContain("on snapshots(key, generated_at desc)");
+  });
+
+  it("adds source health tracking columns and failure count constraint", () => {
+    const db = applyMigrations();
+    db.public.none(`
+      insert into sources (name, rss_url, authority_weight, category, consecutive_failures, last_error)
+      values ('Health Source', 'https://example.com/health-rss', 1.00, 'international', 2, 'timeout');
+    `);
+
+    const rows = db.public.many(
+      "select consecutive_failures, last_error from sources where rss_url = 'https://example.com/health-rss';",
+    ) as Array<{ consecutive_failures: number; last_error: string | null }>;
+
+    expect(rows[0].consecutive_failures).toBe(2);
+    expect(rows[0].last_error).toBe("timeout");
+
+    expect(() =>
+      db.public.none(`
+        insert into sources (name, rss_url, authority_weight, category, consecutive_failures)
+        values ('Invalid Health Source', 'https://example.com/invalid-health-rss', 1.00, 'international', -1);
+      `),
+    ).toThrow();
+  });
+
+  it("enforces strict flat ten categories on sources and events", () => {
+    const db = applyMigrations();
+
+    expect(() =>
+      db.public.none(`
+        insert into sources (name, rss_url, authority_weight, category)
+        values ('Legacy Category Source', 'https://example.com/legacy-rss', 1.00, 'world');
+      `),
+    ).toThrow();
+
+    db.public.none(`
+      insert into pipeline_runs (started_at, status)
+      values ('2026-03-02T00:00:00.000Z', 'running');
+    `);
+
+    expect(() =>
+      db.public.none(`
+        insert into events (canonical_title, category, window_start, window_end)
+        values ('Legacy Event', 'world', '2026-03-02T00:00:00.000Z', '2026-03-03T00:00:00.000Z');
+      `),
+    ).toThrow();
   });
 });

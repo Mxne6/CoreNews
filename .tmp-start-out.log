@@ -1,0 +1,9 @@
+
+> core-news-app@0.1.0 start
+> next start --port 3200
+
+▲ Next.js 16.1.6
+- Local:         http://localhost:3200
+- Network:       http://192.168.5.26:3200
+
+✓ Starting...
